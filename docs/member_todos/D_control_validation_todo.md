@@ -1,4 +1,4 @@
-﻿# 成员 D TODO：控制执行、日志、曲线、验证结果
+# 成员 D TODO：控制执行、日志、曲线、验证结果
 
 你负责 `src/control/`、`src/visualization/` 和 `results/`。
 
@@ -123,7 +123,7 @@ summary 表格建议包含：
 - 最小 obstacle clearance；
 - execution time。
 
-## 6/21 周日：PPT 验证页
+## 6/20 周六：PPT 验证页
 
 你要给 A 的 PPT 提供：controller design 简图或文字；joint tracking error 曲线；end-effector position error 曲线；obstacle clearance 曲线；表格：每个 demo 是否成功、最大误差、最小避障距离、执行时间。
 

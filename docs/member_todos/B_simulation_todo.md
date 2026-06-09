@@ -1,4 +1,4 @@
-﻿# 成员 B TODO：PyBullet 仿真环境、场景、虚拟吸附
+# 成员 B TODO：PyBullet 仿真环境、场景、虚拟吸附
 
 你负责目录：`src/simulation/` 和 `assets/`。
 
@@ -57,14 +57,14 @@ piece_radius = config.piece_radius  # 默认 0.015 m
 piece_height = config.piece_height  # 默认 0.012 m
 ```
 
-棋盘平板建议按下面方式推导：
+棋盘平板可以按下面方式推导：
 
 ```python
 board_width = config.board_cols * config.cell_size   # 默认 0.36 m
 board_depth = config.board_rows * config.cell_size   # 默认 0.40 m
 ```
 
-棋子可视化用 cylinder primitive：半径用 `config.piece_radius`，高度用 `config.piece_height`。C 做避障时会使用 `config.inflated_piece_radius`，B 不要把 inflated radius 当成棋子的真实显示半径。
+棋子可视化可以用 cylinder primitive：半径用 `config.piece_radius`，高度用 `config.piece_height`。C 做避障时会使用 `config.inflated_piece_radius`，B 不要把 inflated radius 当成棋子的真实显示半径。
 
 ### 第二版必须完成
 
@@ -93,12 +93,9 @@ board_depth = config.board_rows * config.cell_size   # 默认 0.40 m
 
 要做：
 
-- 选择一个模型：UR5 / UR5e / xArm6 / Panda / Lite6。
-- 把模型资源放进 `assets/robot/`。
+- 选定了UR5模型
 - 用 PyBullet 加载 URDF。
 - 返回真实 `RobotHandle`：`robot_id`、`end_effector_id`、`joint_indices`。
-
-如果暂时没找到模型：保留 mock 返回值，并在文件顶部注释候选模型路径和还缺什么。
 
 ### 2. 场景初版
 
