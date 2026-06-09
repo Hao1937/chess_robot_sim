@@ -31,6 +31,60 @@ def attach_piece(piece_id: str, end_effector_id: int) -> OperationResult:
 def detach_piece(piece_id: str) -> OperationResult:
 ```
 
+## 棋盘和棋子可视化范围
+
+B 的可视化做到第二版为止：重点是让仿真场景清楚、稳定、能和 A/C/D 接口对上，不做精细美术建模。
+
+### 第一版必须完成
+
+- 棋盘用 PyBullet box primitive 建一个薄平板，不需要单独建 URDF。
+- 棋盘尺寸覆盖 9 列 x 10 行，位置和 `DEFAULT_CONFIG.board_origin`、`cell_size` 对齐。
+- 棋子用 cylinder primitive 表示，不需要真实象棋模型。
+- 红方棋子用红色，黑方棋子用深色或黑色。
+- 静态障碍物和 obstacle mode 也用 cylinder primitive。
+- 坐标转换不要自己写一套，棋子落点必须和 C 的 `cell_to_world(cell, config)` 保持一致。
+
+
+### 尺寸来源
+
+B 不要自己硬编码棋盘和棋子尺寸，统一从 `src/common/config.py` 的 `Config` 读取：
+
+```python
+board_cols = config.board_cols      # 默认 9
+board_rows = config.board_rows      # 默认 10
+cell_size = config.cell_size        # 默认 0.04 m
+piece_radius = config.piece_radius  # 默认 0.015 m
+piece_height = config.piece_height  # 默认 0.012 m
+```
+
+棋盘平板建议按下面方式推导：
+
+```python
+board_width = config.board_cols * config.cell_size   # 默认 0.36 m
+board_depth = config.board_rows * config.cell_size   # 默认 0.40 m
+```
+
+棋子可视化用 cylinder primitive：半径用 `config.piece_radius`，高度用 `config.piece_height`。C 做避障时会使用 `config.inflated_piece_radius`，B 不要把 inflated radius 当成棋子的真实显示半径。
+
+### 第二版必须完成
+
+- 给棋子顶部或旁边加文字标签，例如 `车`、`炮`，让演示时能看出是什么棋子。
+- 在棋盘旁边画出 captured area，也就是吃子区。
+- 吃子时能看出目标格敌方棋子先进入 captured area，然后己方棋子落到目标格。
+- reset 时，棋子能回到初始位置；captured area 里的棋子也能被移回原位。
+- `attach_piece()` / `detach_piece()` 要让棋子视觉上跟随机械臂末端移动，可以用 PyBullet constraint，也可以先用简化位置更新。
+- 固定一个适合录屏的 camera view，能同时看到机械臂、棋盘、障碍物和吃子区。
+
+### 明确不做
+
+- 不做精细棋盘 3D 建模。
+- 不做真实木纹、棋子雕刻、复杂材质。
+- 不要求棋子贴图。
+- 不要求每个棋子做独立 URDF 或 mesh。
+- 不负责判断象棋规则，规则归 A。
+- 不负责 IK、路径规划和避障决策，规划归 C。
+- 不负责关节控制器和误差图，控制验证归 D。
+
 ## 6/11 周四：模块起步
 
 ### 1. 机械臂加载
@@ -114,9 +168,16 @@ OperationResult(success=True, message="...")
 
 ## 6/18 周四：P2 功能
 
-### 1. reset 场景更新
+### 1. reset 场景响应
 
-当 A/C 给出 reset 动作后，B 要保证：棋子回到初始位置；captured area 的棋子也能被移回。
+当 A/C 给出 reset 对应的 pick/place 动作序列后，B 只需要保证仿真场景能正确响应这些动作：
+
+- `attach_piece()` 后，棋子能跟随机械臂末端移动；
+- `detach_piece()` 后，棋子能停在目标位置；
+- 如果目标位置是初始格，棋子视觉上回到初始格；
+- 如果棋子之前在 captured area，也能通过同样的 pick/place 流程被移回。
+
+B 不需要自己判断 reset 应该怎么走，也不需要自己决定棋子的初始位置；reset 的逻辑动作由 A/C 生成。
 
 ### 2. human safety zone
 
@@ -134,3 +195,5 @@ python main.py --demo
 ```
 
 不要改：`src/interaction/`、`src/planning/`、`src/control/`、`src/common/`、`main.py`。如果需要新场景接口，先找 C。
+
+

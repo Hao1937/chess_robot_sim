@@ -23,6 +23,12 @@ python main.py --demo
 python -m unittest discover -s tests -v
 ```
 
+## 需要阅读的文档
+
+- ./docs/统一接口文档
+- ./docs/项目大纲project_outline是项目的整体概念，防止理解有歧义
+- ./docs/member_todos里是大家自己的任务
+
 ## 重要约定
 
 - `main.py`、`src/common/`、`docs/interface_contract.md` 由 C 统一维护。
