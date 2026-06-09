@@ -1,0 +1,109 @@
+# Interface Contract
+
+本文件由成员 C 维护。其他成员如果需要改函数签名、数据结构、坐标系或主流程，先和 C 对齐，再改这里和 `src/common/`。
+
+## Ownership Rules
+
+| 文件 / 目录 | 负责人 | 修改规则 |
+|---|---|---|
+| `main.py` | C | 只由 C 维护主流程 |
+| `src/common/` | C | 只由 C 维护共享类型和配置 |
+| `src/interaction/` | A | A 负责，接口变化先通知 C |
+| `src/simulation/` | B | B 负责，接口变化先通知 C |
+| `src/planning/` | C | C 负责 |
+| `src/control/` | D | D 负责，接口变化先通知 C |
+| `src/visualization/` | D | D 负责 |
+| `docs/member_todos/` | C 先建，个人可补充进度 | 不改接口定义 |
+
+## Shared Types
+
+共享类型在 `src/common/types.py`。
+
+| 类型 | 作用 |
+|---|---|
+| `MoveCommand` | 用户输入后的统一命令，例如移动、reset、hand_on |
+| `Piece` | 一个棋子的 id、类型、颜色和所在格子 |
+| `BoardState` | 当前棋盘上每个格子的棋子状态 |
+| `ValidationResult` | 走法是否合法及原因 |
+| `LogicalAction` | A 输出的逻辑动作，例如 pick/place |
+| `MotionPrimitive` | C 输出的机器人运动基元，例如 approach/descend/lift |
+| `Obstacle` | 棋子、障碍柱、人手安全区等障碍物 |
+| `JointTrajectory` | D 可执行的关节轨迹和速度模式 |
+| `ExecutionResult` | D 输出的执行结果和误差数据 |
+
+## Cell And Coordinate Convention
+
+- 棋盘列：`A` 到 `I`。
+- 棋盘行：`1` 到 `10`。
+- `A1` 是棋盘左下角。
+- 棋盘坐标到世界坐标只通过 `cell_to_world()` 转换。
+- B 和 D 不单独定义坐标系。
+- captured area 使用形如 `CAPTURED_BLACK_1` 的虚拟 cell。
+
+## Public Interfaces
+
+### A: Interaction
+
+| 函数 | 文件 | 输入 | 输出 | 当前 mock 行为 |
+|---|---|---|---|---|
+| `parse_command(command_text)` | `src/interaction/cli.py` | `"A1 B1"` / `"reset"` / `"hand_on"` | `MoveCommand` | 解析基础命令 |
+| `create_initial_board()` | `src/interaction/board_state.py` | 无 | `BoardState` | 创建 A1/B1/C1 小棋盘 |
+| `make_logical_actions(board, command)` | `src/interaction/board_state.py` | 棋盘状态、命令 | `list[LogicalAction]` | 普通走子、吃子、reset |
+| `validate_move(board, command)` | `src/interaction/chess_rules.py` | 棋盘状态、命令 | `ValidationResult` | 简化车、马、炮规则 |
+| `make_gui_command(from_cell, to_cell)` | `src/interaction/gui.py` | GUI 选择 | `MoveCommand` | GUI 占位适配 |
+| `make_safety_command(hand_present)` | `src/interaction/gui.py` | 是否有人手 | `MoveCommand` | hand_on / hand_off |
+
+### B: Simulation
+
+| 函数 | 文件 | 输入 | 输出 | 当前 mock 行为 |
+|---|---|---|---|---|
+| `load_robot(urdf_path=None)` | `src/simulation/load_robot.py` | URDF 路径 | `RobotHandle` | 返回假 robot id |
+| `build_scene(config)` | `src/simulation/scene_builder.py` | 配置 | `SceneHandle` | 返回棋盘、棋子、障碍物 id |
+| `attach_piece(piece_id, end_effector_id)` | `src/simulation/attachment.py` | 棋子 id、末端 id | `OperationResult` | 返回成功 |
+| `detach_piece(piece_id)` | `src/simulation/attachment.py` | 棋子 id | `OperationResult` | 返回成功 |
+
+### C: Planning
+
+| 函数 | 文件 | 输入 | 输出 | 当前 mock 行为 |
+|---|---|---|---|---|
+| `cell_to_world(cell, config)` | `src/planning/chessboard_mapping.py` | cell | `(x, y, z)` | 按 `A1` 原点映射 |
+| `cell_above_world(cell, config)` | `src/planning/chessboard_mapping.py` | cell | safe height 点 | z 使用 `z_safe` |
+| `solve_ik(target_xyz, config)` | `src/planning/ik_solver.py` | 世界坐标 | 关节角 tuple | 假 IK |
+| `is_reachable(target_xyz, config)` | `src/planning/ik_solver.py` | 世界坐标 | bool | 基础范围检查 |
+| `build_motion_primitives(actions, config)` | `src/planning/motion_primitives.py` | 逻辑动作 | 运动基元 | pick/place 拆成 approach/descend/lift 等 |
+| `build_obstacle_map(...)` | `src/planning/obstacle_map.py` | 棋子、人手、额外障碍 | `list[Obstacle]` | 棋子膨胀障碍 |
+| `plan_trajectory(primitives, obstacles, config)` | `src/planning/trajectory_planner.py` | 运动基元、障碍 | `JointTrajectory` | 输出假关节点和 fast/safe profile |
+
+### D: Control And Validation
+
+| 函数 | 文件 | 输入 | 输出 | 当前 mock 行为 |
+|---|---|---|---|---|
+| `execute_trajectory(trajectory)` | `src/control/controller.py` | `JointTrajectory` | `ExecutionResult` | 假执行并产生小误差 |
+| `summarize_execution(execution)` | `src/control/logger.py` | `ExecutionResult` | dict | 汇总最大误差、最小距离、时间 |
+| `build_plot_data(execution)` | `src/visualization/plot_results.py` | `ExecutionResult` | dict | 返回可画图数据 |
+
+## End-To-End Pipeline
+
+`main.py --demo` 当前流程：
+
+1. B 加载 robot 和 scene。
+2. A 创建棋盘、解析命令、校验规则、生成 logical actions。
+3. C 生成 motion primitives、obstacle map、joint trajectory。
+4. B 执行 attach/detach 占位。
+5. D 执行 trajectory 并生成误差 summary。
+
+## Integration Rule
+
+每个成员提交自己的模块前，至少保证：
+
+```bash
+python -m unittest discover -s tests -v
+python main.py --demo
+```
+
+如果改了函数签名，必须同步修改：
+
+1. `src/common/types.py`
+2. `docs/interface_contract.md`
+3. `tests/test_contract_interfaces.py`
+4. 调用该接口的模块

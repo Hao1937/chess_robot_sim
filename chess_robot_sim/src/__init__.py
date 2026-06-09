@@ -1,0 +1,1 @@
+"""Chess robot simulation package."""
