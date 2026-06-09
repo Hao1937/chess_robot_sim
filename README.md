@@ -29,3 +29,7 @@ python -m unittest discover -s tests -v
 - 其他成员尽量只改自己负责的目录。
 - 如果需要新增接口或改数据结构，先和 C 对齐，再改 `src/common/types.py` 和接口文档。
 - 不做象棋 AI、不做真实视觉识别、不做真实夹爪动力学、不做移动棋盘。
+
+## 推荐安装urdf-visualizer插件
+
+在vscode安装后，可以直接预览urdf文件的模型
