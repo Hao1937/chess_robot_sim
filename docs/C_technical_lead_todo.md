@@ -1,4 +1,4 @@
-﻿# 成员 C TODO：技术负责人、接口、坐标、IK、规划、集成
+# 成员 C TODO：技术负责人、接口、坐标、IK、规划、集成
 
 你负责 `main.py`、`src/common/`、`src/planning/` 和接口文档。
 

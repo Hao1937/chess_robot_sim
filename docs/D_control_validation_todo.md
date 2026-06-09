@@ -1,4 +1,4 @@
-﻿# 成员 D TODO：控制执行、日志、曲线、验证结果
+# 成员 D TODO：控制执行、日志、曲线、验证结果
 
 你负责 `src/control/`、`src/visualization/` 和 `results/`。
 

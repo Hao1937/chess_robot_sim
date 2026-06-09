@@ -11,6 +11,7 @@
 | 文件 | 你要做什么 |
 |---|---|
 | `src/interaction/cli.py` | 解析命令行输入 |
+| `src/interaction/chinese_notation.py` | 解析红方中文记谱输入 |
 | `src/interaction/board_state.py` | 维护棋盘状态，生成逻辑动作序列 |
 | `src/interaction/chess_rules.py` | 判断简化象棋走法是否合法 |
 | `src/interaction/gui.py` | GUI 输入和 hand_on/hand_off 命令适配 |
@@ -30,6 +31,8 @@
 
 你输出的动作必须是 `list[LogicalAction]`，不要自己发明新格式。
 
+中文记谱解析必须输出 `MoveCommand`，不要直接输出动作序列。
+
 ## 6/11 周四：模块起步
 
 ### 1. 完善 `parse_command()`
@@ -48,8 +51,9 @@ def parse_command(command_text: str) -> MoveCommand:
 - `reset`：复位命令，返回 `MoveCommand(command_type="reset")`
 - `hand_on`：人手进入，返回 `MoveCommand(command_type="hand_on")`
 - `hand_off`：人手离开，返回 `MoveCommand(command_type="hand_off")`
+- `obstacle_mode 1/2/3`：障碍预设切换，返回 `MoveCommand(command_type="obstacle_mode", mode="mode_1")` 等
 
-验收：空输入要报错；`A1` 这种只有一个格子的输入要报错；大小写不敏感，`a1 b1` 应转成 `A1 B1`。
+验收：空输入要报错；`A1` 这种只有一个格子的输入要报错；大小写不敏感，`a1 b1` 应转成 `A1 B1`；`obstacle_mode 4` 要报错。
 
 ### 2. 完善 `create_initial_board()`
 
@@ -98,8 +102,30 @@ C 会调用：
 
 ### 1. demo 命令表
 
-在 `docs/interaction_spec.md` 里写清楚：普通走子 demo、吃子 demo、绕障 demo、reset demo、`hand_on` / `hand_off` demo。
+在 `docs/interaction_spec.md` 里写清楚：普通走子 demo、吃子 demo、绕障 demo、reset demo、`hand_on` / `hand_off` demo、`obstacle_mode 1/2/3` demo。
 
+### 1.1 中文记谱 demo
+
+文件：`src/interaction/chinese_notation.py`
+
+函数：
+
+```python
+def parse_chinese_move(text: str, board: BoardState, side: str = "red") -> MoveCommand:
+```
+
+只支持红方，并且只支持：
+
+- `车二平七`
+- `炮五进四`
+
+规则：
+
+- 一到九映射到 A 到 I；
+- 红方前进表示行号增加；
+- 同一路同类棋子如果有多个，必须提示玩家输入 `前` / `后`；
+- 支持 `前车二平七`、`后车二平七` 这种消歧形式；
+- 不支持黑方，不支持完整象棋 AI。
 ### 2. 棋盘状态更新接口
 
 建议补函数：
@@ -120,7 +146,7 @@ def apply_logical_actions(board: BoardState, actions: list[LogicalAction]) -> Bo
 
 文件：`src/interaction/gui.py`
 
-最小目标：能构造 `MoveCommand`；能构造 `hand_on` / `hand_off`；GUI 可以很简陋，可以先用输入框和按钮。
+最小目标：能构造 `MoveCommand`；能构造 `hand_on` / `hand_off`；能选择 obstacle mode；能输入 `车二平七` 或 `炮五进四` 并调用 `parse_chinese_move()`；GUI 可以很简陋，可以先用输入框、按钮和下拉框。
 
 不需要做：将军判断、胜负判断、完整象棋 AI、全部棋子的复杂限制。
 
@@ -132,3 +158,4 @@ python main.py --demo
 ```
 
 不要改：`main.py`、`src/common/types.py`、`src/common/config.py`、`docs/interface_contract.md`。如果确实需要改，先找 C。
+

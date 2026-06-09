@@ -77,6 +77,99 @@ class ContractInterfaceTests(unittest.TestCase):
         self.assertTrue(execution.success)
         self.assertIn("max_joint_error", summary)
 
+    def test_obstacle_mode_command_and_scene_presets(self):
+        from src.interaction.cli import parse_command
+        from src.simulation.scene_builder import build_scene
+
+        command = parse_command("obstacle_mode 2")
+        scene = build_scene(obstacle_mode=command.mode)
+
+        self.assertEqual(command.command_type, "obstacle_mode")
+        self.assertEqual(command.mode, "mode_2")
+        self.assertGreaterEqual(len(scene.obstacles), 2)
+        self.assertTrue(all(obstacle.obstacle_id.startswith("preset_column_") for obstacle in scene.obstacles))
+
+    def test_human_hand_obstacle_can_pause_when_target_blocked(self):
+        from src.common.config import DEFAULT_CONFIG
+        from src.common.types import Obstacle
+        from src.planning.obstacle_map import assess_obstacle_intervention
+
+        target_xyz = (
+            DEFAULT_CONFIG.board_origin[0] + 4 * DEFAULT_CONFIG.cell_size,
+            DEFAULT_CONFIG.board_origin[1] + 4 * DEFAULT_CONFIG.cell_size,
+            DEFAULT_CONFIG.z_board,
+        )
+        blocking_hand = Obstacle(
+            obstacle_id="human_hand_zone",
+            center_xyz=target_xyz,
+            radius=0.08,
+            height=0.12,
+            dynamic=True,
+        )
+
+        decision = assess_obstacle_intervention(target_xyz, [blocking_hand], DEFAULT_CONFIG)
+
+        self.assertEqual(decision.status, "pause")
+        self.assertIn("blocked", decision.reason)
+
+    def test_main_demo_accepts_obstacle_mode_without_piece_attachment(self):
+        from main import run_demo
+
+        result = run_demo("obstacle_mode 2")
+
+        self.assertEqual(result["command"].command_type, "obstacle_mode")
+        self.assertGreaterEqual(result["trajectory_points"], 1)
+        self.assertTrue(result["execution"].success)
+
+    def test_red_chinese_notation_rook_horizontal_move(self):
+        from src.common.types import BoardState, Piece, PieceColor, PieceType
+        from src.interaction.chinese_notation import parse_chinese_move
+
+        board = BoardState(
+            pieces={
+                "B1": Piece(piece_id="red_rook_2", kind=PieceType.ROOK, color=PieceColor.RED, cell="B1"),
+            }
+        )
+
+        command = parse_chinese_move("车二平七", board)
+
+        self.assertEqual(command.command_type, "move")
+        self.assertEqual(command.from_cell, "B1")
+        self.assertEqual(command.to_cell, "G1")
+
+    def test_red_chinese_notation_cannon_advance(self):
+        from src.common.types import BoardState, Piece, PieceColor, PieceType
+        from src.interaction.chinese_notation import parse_chinese_move
+
+        board = BoardState(
+            pieces={
+                "E3": Piece(piece_id="red_cannon_5", kind=PieceType.CANNON, color=PieceColor.RED, cell="E3"),
+            }
+        )
+
+        command = parse_chinese_move("炮五进四", board)
+
+        self.assertEqual(command.from_cell, "E3")
+        self.assertEqual(command.to_cell, "E7")
+
+    def test_red_chinese_notation_requires_front_or_back_when_ambiguous(self):
+        from src.common.types import BoardState, Piece, PieceColor, PieceType
+        from src.interaction.chinese_notation import parse_chinese_move
+
+        board = BoardState(
+            pieces={
+                "B1": Piece(piece_id="red_rook_back", kind=PieceType.ROOK, color=PieceColor.RED, cell="B1"),
+                "B4": Piece(piece_id="red_rook_front", kind=PieceType.ROOK, color=PieceColor.RED, cell="B4"),
+            }
+        )
+
+        with self.assertRaisesRegex(ValueError, "前/后"):
+            parse_chinese_move("车二平七", board)
+
+        command = parse_chinese_move("前车二平七", board)
+        self.assertEqual(command.from_cell, "B4")
+        self.assertEqual(command.to_cell, "G4")
+
 
 if __name__ == "__main__":
     unittest.main()

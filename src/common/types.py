@@ -41,6 +41,7 @@ class MoveCommand:
     command_type: str
     from_cell: str = ""
     to_cell: str = ""
+    mode: str = ""
 
 
 @dataclass(frozen=True)
@@ -71,6 +72,12 @@ class Obstacle:
     radius: float
     height: float
     dynamic: bool = False
+
+
+@dataclass(frozen=True)
+class SafetyDecision:
+    status: str
+    reason: str = ""
 
 
 @dataclass(frozen=True)

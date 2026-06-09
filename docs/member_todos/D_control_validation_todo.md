@@ -103,7 +103,7 @@ def save_plots(execution: ExecutionResult, output_dir: str = "results") -> list[
 
 ## 6/18 周四：P2 reset 和人手暂停结果
 
-要输出这些场景的结果：普通走子、吃子、绕障、reset、hand_on 暂停 / hand_off 继续。
+要输出这些场景的结果：普通走子、吃子、`obstacle_mode 1/2/3` 绕障对比、reset、hand_on 后 safe / pause、hand_off 继续。
 
 建议在 `results/` 保存：
 
@@ -112,6 +112,16 @@ def save_plots(execution: ExecutionResult, output_dir: str = "results") -> list[
 - `obstacle_clearance_demo.csv`
 - `summary_table.csv`
 - 对应 png 曲线
+
+summary 表格建议包含：
+
+- obstacle mode；
+- 是否出现 hand_on；
+- safety decision：continue / safe / pause；
+- 最大 joint error；
+- 最大 end-effector error；
+- 最小 obstacle clearance；
+- execution time。
 
 ## 6/21 周日：PPT 验证页
 

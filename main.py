@@ -19,11 +19,12 @@ from src.simulation.scene_builder import build_scene
 def run_demo(command_text: str = "A1 B1") -> dict[str, object]:
     """Run a mock end-to-end pipeline through A/B/C/D interfaces."""
     config = DEFAULT_CONFIG
+    command = parse_command(command_text)
+    obstacle_mode = command.mode if command.command_type == "obstacle_mode" else "mode_1"
     robot = load_robot()
-    scene = build_scene(config=config)
+    scene = build_scene(config=config, obstacle_mode=obstacle_mode)
     board = create_initial_board()
 
-    command = parse_command(command_text)
     validation = validate_move(board, command)
     if not validation.is_legal:
         raise ValueError(validation.reason)
@@ -33,10 +34,11 @@ def run_demo(command_text: str = "A1 B1") -> dict[str, object]:
     obstacles = build_obstacle_map(piece_cells=list(board.pieces), extra_obstacles=scene.obstacles, config=config)
     trajectory = plan_trajectory(primitives, obstacles, config)
 
-    if actions:
+    should_attach_piece = command.command_type == "move" and command.from_cell in board.pieces
+    if should_attach_piece:
         attach_piece(piece_id=board.pieces[command.from_cell].piece_id, end_effector_id=robot.end_effector_id)
     execution = execute_trajectory(trajectory)
-    if actions:
+    if should_attach_piece:
         detach_piece(piece_id=board.pieces[command.from_cell].piece_id)
 
     summary = summarize_execution(execution)

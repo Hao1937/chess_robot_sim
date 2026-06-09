@@ -16,7 +16,7 @@ C 是技术负责人。任何接口、坐标系、数据结构、主流程修改
 | `src/planning/chessboard_mapping.py` | 棋盘格到世界坐标 |
 | `src/planning/ik_solver.py` | IK 和可达性检查 |
 | `src/planning/motion_primitives.py` | 逻辑动作到运动基元 |
-| `src/planning/obstacle_map.py` | 障碍物地图 |
+| `src/planning/obstacle_map.py` | 障碍物地图和动态障碍介入判断 |
 | `src/planning/trajectory_planner.py` | waypoint、轨迹、速度模式 |
 | `docs/interface_contract.md` | 接口契约 |
 | `tests/test_contract_interfaces.py` | 接口测试 |
@@ -105,7 +105,23 @@ def build_obstacle_map(
 ) -> list[Obstacle]:
 ```
 
-要求：棋子转成 inflated obstacle；静态障碍柱加入 obstacle list；hand_on 时加入 human hand dynamic obstacle；正在抓取的棋子后续可以从 obstacle list 中排除。
+要求：棋子转成 inflated obstacle；obstacle mode 的预设圆柱加入 obstacle list；hand_on 时加入 human hand dynamic obstacle；正在抓取的棋子后续可以从 obstacle list 中排除。
+
+同时提供动态障碍介入判断：
+
+```python
+def assess_obstacle_intervention(
+    target_xyz: tuple[float, float, float],
+    obstacles: list[Obstacle],
+    config: Config = DEFAULT_CONFIG,
+) -> SafetyDecision:
+```
+
+返回：
+
+- `continue`：目标仍然可达且远离动态障碍；
+- `safe`：目标可达但靠近动态障碍，进入慢速安全模式；
+- `pause`：目标不可达或被人手区域阻挡，提示移除障碍。
 
 ### 2. 轨迹规划
 
@@ -125,7 +141,7 @@ def plan_trajectory(
 
 ## 6/18 周四：P2 reset、规则、GUI、人手区集成
 
-你要负责把 A/B/D 的 P2 功能接入主流程：`reset` 命令能从 A 到 C 到 B/D 跑通；`hand_on` 能进入 obstacle map 或 safety_pause；`hand_off` 后能恢复执行；GUI 输出的 `MoveCommand` 和 CLI 一致。
+你要负责把 A/B/D 的 P2 功能接入主流程：`reset` 命令能从 A 到 C 到 B/D 跑通；`obstacle_mode` 能切换 B 的预设圆柱障碍；`hand_on` 能进入 obstacle map 并调用 `assess_obstacle_intervention()`；`hand_off` 后能恢复执行或重新规划；GUI 输出的 `MoveCommand` 和 CLI 一致。
 
 如果需要新增共享类型，只能你改：`src/common/types.py`、`docs/interface_contract.md`、`tests/test_contract_interfaces.py`。
 

@@ -24,7 +24,7 @@
 ```python
 def load_robot(urdf_path: str | None = None) -> RobotHandle:
 
-def build_scene(config: Config = DEFAULT_CONFIG) -> SceneHandle:
+def build_scene(config: Config = DEFAULT_CONFIG, obstacle_mode: str = "mode_1") -> SceneHandle:
 
 def attach_piece(piece_id: str, end_effector_id: int) -> OperationResult:
 
@@ -51,6 +51,19 @@ def detach_piece(piece_id: str) -> OperationResult:
 文件：`src/simulation/scene_builder.py`
 
 要创建：桌面、9 x 10 棋盘、至少 3 个 demo 棋子 A1/B1/C1、captured area、至少 1 个静态障碍柱。
+
+同时实现障碍预设：
+
+```python
+def build_obstacle_preset(obstacle_mode: str, config: Config = DEFAULT_CONFIG) -> list[Obstacle]:
+```
+
+要求至少支持：
+
+- `mode_1`：2 个竖直圆柱障碍；
+- `mode_2`：3 个竖直圆柱障碍；
+- `mode_3`：3 个不同位置的竖直圆柱障碍；
+- `none`：无额外预设障碍。
 
 返回：
 
@@ -93,7 +106,7 @@ OperationResult(success=True, message="...")
 
 文件：`src/simulation/scene_builder.py`
 
-要做：静态障碍柱用明显颜色；棋子颜色区分红黑；captured area 清楚可见；如果 C 输出轨迹点，能配合显示轨迹线或 waypoint 小球。
+要做：静态障碍柱用明显颜色；不同 obstacle mode 的柱子位置明显不同；棋子颜色区分红黑；captured area 清楚可见；如果 C 输出轨迹点，能配合显示轨迹线或 waypoint 小球。
 
 ### 2. 绕障录屏视角
 
@@ -109,7 +122,7 @@ OperationResult(success=True, message="...")
 
 文件：`src/simulation/scene_builder.py`
 
-要做：显示一个半透明红色区域或动态障碍块；hand_on 时显示/启用；hand_off 时隐藏/禁用。
+要做：显示一个半透明红色区域或动态障碍块；hand_on 时显示/启用；hand_off 时隐藏/禁用。这个人手障碍和 obstacle mode 的静态圆柱不同，它是 dynamic obstacle。
 
 如果接口不够，先找 C 更新 `SceneHandle` 或新增函数。
 

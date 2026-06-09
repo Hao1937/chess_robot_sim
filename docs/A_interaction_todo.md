@@ -4,13 +4,14 @@
 
 你的模块回答一个问题：**用户输入了一步棋，系统应该生成什么逻辑动作？**
 
-不要写机器人运动、IK、PyBullet 控制。你只输出 `MoveCommand`、`ValidationResult`、`LogicalAction`，后面由 C/B/D 接。
+不需要写机器人运动、IK、PyBullet 控制。你只输出 `MoveCommand`、`ValidationResult`、`LogicalAction`，后面由 C/B/D 接。
 
 ## 你负责的文件
 
 | 文件 | 你要做什么 |
 |---|---|
 | `src/interaction/cli.py` | 解析命令行输入 |
+| `src/interaction/chinese_notation.py` | 解析红方中文记谱输入 |
 | `src/interaction/board_state.py` | 维护棋盘状态，生成逻辑动作序列 |
 | `src/interaction/chess_rules.py` | 判断简化象棋走法是否合法 |
 | `src/interaction/gui.py` | GUI 输入和 hand_on/hand_off 命令适配 |
@@ -29,6 +30,8 @@
 - `LogicalAction`
 
 你输出的动作必须是 `list[LogicalAction]`，不要自己发明新格式。
+
+中文记谱解析必须输出 `MoveCommand`，不要直接输出动作序列。
 
 ## 6/11 周四：模块起步
 
@@ -100,6 +103,28 @@ C 会调用：
 
 在 `docs/interaction_spec.md` 里写清楚：普通走子 demo、吃子 demo、绕障 demo、reset demo、`hand_on` / `hand_off` demo。
 
+### 1.1 中文记谱 demo
+
+文件：`src/interaction/chinese_notation.py`
+
+函数：
+
+```python
+def parse_chinese_move(text: str, board: BoardState, side: str = "red") -> MoveCommand:
+```
+
+只支持红方，并且只支持：
+
+- `车二平七`
+- `炮五进四`
+
+规则：
+
+- 一到九映射到 A 到 I；
+- 红方前进表示行号增加；
+- 同一路同类棋子如果有多个，必须提示玩家输入 `前` / `后`；
+- 支持 `前车二平七`、`后车二平七` 这种消歧形式；
+- 不支持黑方，不支持完整象棋 AI。
 ### 2. 棋盘状态更新接口
 
 建议补函数：
@@ -132,3 +157,4 @@ python main.py --demo
 ```
 
 不要改：`main.py`、`src/common/types.py`、`src/common/config.py`、`docs/interface_contract.md`。如果确实需要改，先找 C。
+

@@ -1,19 +1,19 @@
-﻿# 成员 B TODO：PyBullet 仿真环境、场景、虚拟吸附
+# 成员 B TODO：PyBullet 仿真环境、场景、虚拟吸附
 
 你负责目录：`src/simulation/` 和 `assets/`。
 
 你的模块回答一个问题：**机器人、棋盘、棋子、障碍物在仿真里怎么显示和更新？**
 
-不要写棋子规则、IK、轨迹规划、控制器。你只负责仿真对象和 attach/detach。
+不需要写棋子规则、IK、轨迹规划、控制器。你只负责仿真对象和 attach/detach。
 
 ## 你负责的文件
 
-| 文件 | 你要做什么 |
-|---|---|
-| `src/simulation/load_robot.py` | 加载机械臂 URDF，返回 robot handle |
-| `src/simulation/scene_builder.py` | 创建桌面、棋盘、棋子、障碍物、人手安全区 |
-| `src/simulation/attachment.py` | 实现虚拟磁吸附 attach/detach |
-| `assets/` | 放 URDF、mesh、棋盘贴图或其他资源 |
+| 文件                                | 你要做什么                      |
+| --------------------------------- | -------------------------- |
+| `src/simulation/load_robot.py`    | 加载机械臂 URDF，返回 robot handle |
+| `src/simulation/scene_builder.py` | 创建桌面、棋盘、棋子、障碍物、人手安全区       |
+| `src/simulation/attachment.py`    | 实现虚拟磁吸附 attach/detach      |
+| `assets/`                         | 放 URDF、mesh、棋盘贴图或其他资源      |
 
 ## 必须遵守的接口
 
@@ -39,19 +39,18 @@ def detach_piece(piece_id: str) -> OperationResult:
 
 要做：
 
-- 选择一个模型：UR5 / UR5e / xArm6 / Panda / Lite6。
+- 项目已经选定了模型：UR5
 - 把模型资源放进 `assets/robot/`。
 - 用 PyBullet 加载 URDF。
 - 返回真实 `RobotHandle`：`robot_id`、`end_effector_id`、`joint_indices`。
-
-如果暂时没找到模型：保留 mock 返回值，并在文件顶部注释候选模型路径和还缺什么。
 
 ### 2. 场景初版
 
 文件：`src/simulation/scene_builder.py`
 
-要创建：桌面、9 x 10 棋盘、至少 3 个 demo 棋子 A1/B1/C1、captured area、至少 1 个静态障碍柱。
-
+要创建：9 x 10 棋盘、至少 3 个 demo 棋子 A1/B1/C1、captured area、至少 1 个静态障碍柱。
+可参考棋盘图片：
+![[Pasted image 20260609152003.png|306]]
 返回：
 
 ```python
