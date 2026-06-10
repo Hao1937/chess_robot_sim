@@ -328,6 +328,48 @@
     <parent link="wrist_3_link"/>
     <child link="tool0"/>
   </joint>
+  <link name="suction_cup_link">
+    <visual name="suction_stem_visual">
+      <origin rpy="0 0 0" xyz="0 0 0.0125"/>
+      <geometry>
+        <cylinder radius="0.007" length="0.025"/>
+      </geometry>
+      <material name="suction_stem_grey">
+        <color rgba="0.55 0.56 0.56 1.0"/>
+      </material>
+    </visual>
+    <visual name="suction_pad_visual">
+      <origin rpy="0 0 0" xyz="0 0 0.031"/>
+      <geometry>
+        <cylinder radius="0.014" length="0.012"/>
+      </geometry>
+      <material name="suction_rubber_grey">
+        <color rgba="0.16 0.17 0.18 1.0"/>
+      </material>
+    </visual>
+    <collision name="suction_stem_collision">
+      <origin rpy="0 0 0" xyz="0 0 0.0125"/>
+      <geometry>
+        <cylinder radius="0.007" length="0.025"/>
+      </geometry>
+    </collision>
+    <collision name="suction_pad_collision">
+      <origin rpy="0 0 0" xyz="0 0 0.031"/>
+      <geometry>
+        <cylinder radius="0.014" length="0.012"/>
+      </geometry>
+    </collision>
+    <inertial>
+      <mass value="0.05"/>
+      <origin rpy="0 0 0" xyz="0 0 0.02"/>
+      <inertia ixx="0.00002" ixy="0.0" ixz="0.0" iyy="0.00002" iyz="0.0" izz="0.00002"/>
+    </inertial>
+  </link>
+  <joint name="wrist_3_link-suction_cup_fixed_joint" type="fixed">
+    <origin rpy="-1.57079632679 0 0" xyz="0 0.0823 0"/>
+    <parent link="wrist_3_link"/>
+    <child link="suction_cup_link"/>
+  </joint>
   <link name="world"/>
   <joint name="world_joint" type="fixed">
     <parent link="world"/>
