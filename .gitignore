@@ -4,4 +4,8 @@ ABCD分工选择说明.pdf
 __pycache__/
 *.py[cod]
 *$py.class
+.vscode/
+results/*.log
+results/simulation_preview*.png
+!results/.gitkeep
 全组TODO时间表.md
