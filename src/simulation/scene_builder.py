@@ -5,7 +5,7 @@ from pathlib import Path
 import tempfile
 
 from src.common.config import DEFAULT_CONFIG, Config
-from src.common.types import Obstacle, SceneHandle
+from src.common.types import LogicalAction, Obstacle, OperationResult, SceneHandle
 from src.planning.chessboard_mapping import cell_to_world
 from src.simulation._runtime import RUNTIME, clear_scene_bodies, ensure_client, p, project_root
 
@@ -52,6 +52,8 @@ _PIECE_SIDE_COLOR = (0.55, 0.34, 0.16, 1.0)
 _PIECE_TOP_COLOR = (0.88, 0.68, 0.40, 1.0)
 _RED_TEXT_COLOR = (0.75, 0.02, 0.02)
 _BLACK_TEXT_COLOR = (0.02, 0.02, 0.02)
+_WAYPOINT_DEBUG_IDS: list[int] = []
+_WAYPOINT_MARKER_BODY_IDS: list[int] = []
 
 
 def build_scene(config: Config = DEFAULT_CONFIG, obstacle_mode: str = "mode_1") -> SceneHandle:
@@ -72,6 +74,7 @@ def build_scene(config: Config = DEFAULT_CONFIG, obstacle_mode: str = "mode_1") 
             obstacles=obstacles,
         )
 
+    clear_debug_visuals()
     clear_scene_bodies()
     _create_table(config, client_id)
     board_id = _create_board(config, client_id)
@@ -111,6 +114,108 @@ def move_piece_to_cell(piece_id: str, cell: str, config: Config = DEFAULT_CONFIG
     RUNTIME.piece_cells[piece_id] = cell
     RUNTIME.piece_ids_by_cell[cell] = piece_id
     return True
+
+
+def move_piece_to_captured_area(piece_id: str, captured_cell: str, config: Config = DEFAULT_CONFIG) -> OperationResult:
+    """Move a known piece to a captured-area virtual cell supplied by A/C."""
+    if not captured_cell.startswith("CAPTURED_"):
+        return OperationResult(False, f"not a captured-area cell: {captured_cell}")
+    if not move_piece_to_cell(piece_id, captured_cell, config):
+        return OperationResult(False, f"could not move {piece_id} to {captured_cell}")
+    return OperationResult(True, f"moved {piece_id} to {captured_cell}")
+
+
+def apply_logical_action(action: LogicalAction, config: Config = DEFAULT_CONFIG) -> OperationResult:
+    """Apply one A/C logical action to simulation visuals without deciding rules."""
+    if action.action_type == "pick":
+        return OperationResult(True, f"pick visual unchanged for {action.piece_id or action.cell}")
+    if action.action_type != "place":
+        return OperationResult(True, f"ignored non-place simulation action: {action.action_type}")
+
+    piece_id = action.piece_id or RUNTIME.piece_ids_by_cell.get(action.cell, "")
+    if not piece_id:
+        return OperationResult(False, f"place action has no known piece for {action.cell}")
+    if action.cell.startswith("CAPTURED_"):
+        return move_piece_to_captured_area(piece_id, action.cell, config)
+    if not move_piece_to_cell(piece_id, action.cell, config):
+        return OperationResult(False, f"could not move {piece_id} to {action.cell}")
+    return OperationResult(True, f"moved {piece_id} to {action.cell}")
+
+
+def apply_logical_actions(actions: list[LogicalAction], config: Config = DEFAULT_CONFIG) -> list[OperationResult]:
+    """Apply an A/C-generated pick/place sequence to the visible scene."""
+    return [apply_logical_action(action, config) for action in actions]
+
+
+def clear_debug_visuals() -> None:
+    """Remove dynamic waypoint/path visuals while keeping board labels intact."""
+    if p is None or RUNTIME.client_id is None or not p.isConnected(RUNTIME.client_id):
+        _WAYPOINT_DEBUG_IDS.clear()
+        _WAYPOINT_MARKER_BODY_IDS.clear()
+        return
+    for debug_id in _WAYPOINT_DEBUG_IDS:
+        try:
+            p.removeUserDebugItem(debug_id, physicsClientId=RUNTIME.client_id)
+        except Exception:
+            pass
+    for body_id in _WAYPOINT_MARKER_BODY_IDS:
+        try:
+            p.removeBody(body_id, physicsClientId=RUNTIME.client_id)
+        except Exception:
+            pass
+        if body_id in RUNTIME.scene_body_ids:
+            RUNTIME.scene_body_ids.remove(body_id)
+    _WAYPOINT_DEBUG_IDS.clear()
+    _WAYPOINT_MARKER_BODY_IDS.clear()
+
+
+def draw_waypoints(
+    points_xyz: list[tuple[float, float, float]],
+    *,
+    clear_existing: bool = True,
+    color_rgb: tuple[float, float, float] = (0.0, 0.55, 1.0),
+    point_radius: float = 0.006,
+) -> list[int]:
+    """Draw C-provided Cartesian waypoints as a path line and small markers."""
+    if clear_existing:
+        clear_debug_visuals()
+    if p is None:
+        return []
+    client_id = ensure_client()
+    if client_id is None or not points_xyz:
+        return []
+
+    created_ids: list[int] = []
+    for start, end in zip(points_xyz, points_xyz[1:]):
+        debug_id = p.addUserDebugLine(
+            start,
+            end,
+            lineColorRGB=color_rgb,
+            lineWidth=2.5,
+            lifeTime=0,
+            physicsClientId=client_id,
+        )
+        _WAYPOINT_DEBUG_IDS.append(debug_id)
+        created_ids.append(debug_id)
+
+    visual_id = p.createVisualShape(
+        p.GEOM_SPHERE,
+        radius=point_radius,
+        rgbaColor=(*color_rgb, 0.95),
+        physicsClientId=client_id,
+    )
+    for point in points_xyz:
+        body_id = p.createMultiBody(
+            baseMass=0.0,
+            baseCollisionShapeIndex=-1,
+            baseVisualShapeIndex=visual_id,
+            basePosition=point,
+            physicsClientId=client_id,
+        )
+        RUNTIME.scene_body_ids.append(body_id)
+        _WAYPOINT_MARKER_BODY_IDS.append(body_id)
+        created_ids.append(body_id)
+    return created_ids
 
 
 def set_human_safety_zone(hand_present: bool, config: Config = DEFAULT_CONFIG) -> int | None:
@@ -417,23 +522,60 @@ def _make_piece_label_texture(text: str, color: str, piece_id: str) -> Path:
 
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
+    from matplotlib import patheffects
+    from matplotlib.patches import Circle
     from matplotlib.font_manager import FontProperties
 
     texture_dir = Path(tempfile.gettempdir()) / "chess_robot_sim_textures" / "pieces"
     texture_dir.mkdir(parents=True, exist_ok=True)
-    texture_path = texture_dir / f"{piece_id}.png"
+    texture_path = texture_dir / f"{piece_id}_v2.png"
 
     font_path = _find_chinese_font()
-    font = FontProperties(fname=str(font_path), size=82) if font_path else None
-    background = _PIECE_TOP_COLOR
-    text_color = (0.86, 0.0, 0.0, 1.0) if color == "red" else (0.0, 0.0, 0.0, 1.0)
+    font = FontProperties(fname=str(font_path), size=72) if font_path else FontProperties(size=72)
+    text_color = _RED_TEXT_COLOR if color == "red" else _BLACK_TEXT_COLOR
+    ring_color = (0.52, 0.25, 0.08, 1.0)
+    shadow_color = (0.18, 0.09, 0.03, 0.42)
+    base_color = (0.90, 0.69, 0.39, 1.0)
+    light_color = (0.98, 0.82, 0.52, 1.0)
 
-    fig = plt.figure(figsize=(1.0, 1.0), dpi=128, facecolor=background)
+    fig = plt.figure(figsize=(1.0, 1.0), dpi=512, facecolor=(0.0, 0.0, 0.0, 0.0))
     ax = fig.add_axes((0, 0, 1, 1))
     ax.set_axis_off()
-    ax.set_facecolor(background)
-    ax.text(0.5, 0.5, text, ha="center", va="center", color=text_color, fontproperties=font)
-    fig.savefig(texture_path, dpi=128, facecolor=background)
+    ax.set_xlim(0.0, 1.0)
+    ax.set_ylim(0.0, 1.0)
+    ax.set_aspect("equal")
+
+    ax.add_patch(Circle((0.5, 0.5), 0.5, facecolor=base_color, edgecolor="none"))
+    for index in range(18):
+        radius = 0.49 - index * 0.018
+        if radius <= 0.0:
+            break
+        alpha = 0.09 if index % 2 == 0 else 0.045
+        ax.add_patch(Circle((0.5, 0.5), radius, fill=False, edgecolor=(0.72, 0.42, 0.17, alpha), linewidth=1.2))
+    ax.add_patch(Circle((0.43, 0.60), 0.45, facecolor=light_color, edgecolor="none", alpha=0.18))
+    ax.add_patch(Circle((0.5, 0.5), 0.485, fill=False, edgecolor=shadow_color, linewidth=8.0))
+    ax.add_patch(Circle((0.5, 0.5), 0.405, fill=False, edgecolor=ring_color, linewidth=9.0))
+    ax.add_patch(Circle((0.5, 0.5), 0.382, fill=False, edgecolor=ring_color, linewidth=3.7, alpha=0.95))
+    ax.add_patch(Circle((0.5, 0.5), 0.455, fill=False, edgecolor=(1.0, 0.90, 0.62, 0.35), linewidth=2.0))
+
+    label = ax.text(0.5, 0.51, text, ha="center", va="center", color=text_color, fontproperties=font)
+    fig.canvas.draw()
+    renderer = fig.canvas.get_renderer()
+    max_extent = fig.bbox.width * 0.65
+    while font.get_size_in_points() > 28:
+        bbox = label.get_window_extent(renderer=renderer)
+        if max(bbox.width, bbox.height) <= max_extent:
+            break
+        font.set_size(font.get_size_in_points() - 2)
+        label.set_fontproperties(font)
+        fig.canvas.draw()
+    label.set_path_effects(
+        [
+            patheffects.withStroke(linewidth=4.0, foreground=(1.0, 0.78, 0.46, 0.72)),
+            patheffects.Normal(),
+        ]
+    )
+    fig.savefig(texture_path, dpi=512, transparent=True, pad_inches=0)
     plt.close(fig)
     return texture_path
 
@@ -536,6 +678,44 @@ def _create_piece(
         physicsClientId=client_id,
     )
     p.changeDynamics(body_id, -1, lateralFriction=0.9, physicsClientId=client_id)
+    p.changeVisualShape(
+        body_id,
+        -1,
+        rgbaColor=_PIECE_WOOD_COLOR,
+        specularColor=(0.28, 0.18, 0.08),
+        physicsClientId=client_id,
+    )
+    for z_offset, radius_scale, height_scale in (
+        (0.0012, 1.015, 0.08),
+        (config.piece_height - 0.0012, 1.0, 0.07),
+    ):
+        trim_visual_id = p.createVisualShape(
+            p.GEOM_CYLINDER,
+            radius=config.piece_radius * radius_scale,
+            length=config.piece_height * height_scale,
+            rgbaColor=_PIECE_SIDE_COLOR,
+            physicsClientId=client_id,
+        )
+        trim_id = p.createMultiBody(
+            baseMass=0.0,
+            baseCollisionShapeIndex=-1,
+            baseVisualShapeIndex=trim_visual_id,
+            basePosition=(x, y, z + z_offset),
+            physicsClientId=client_id,
+        )
+        trim_constraint_id = p.createConstraint(
+            parentBodyUniqueId=body_id,
+            parentLinkIndex=-1,
+            childBodyUniqueId=trim_id,
+            childLinkIndex=-1,
+            jointType=p.JOINT_FIXED,
+            jointAxis=(0.0, 0.0, 0.0),
+            parentFramePosition=(0.0, 0.0, z_offset - config.piece_height / 2.0),
+            childFramePosition=(0.0, 0.0, 0.0),
+            physicsClientId=client_id,
+        )
+        RUNTIME.scene_body_ids.append(trim_id)
+        RUNTIME.attachment_constraints[f"{piece_id}_trim_{z_offset:.4f}"] = trim_constraint_id
     top_visual_id = p.createVisualShape(
         p.GEOM_CYLINDER,
         radius=config.piece_radius * 0.94,
@@ -589,8 +769,8 @@ def _create_piece_label(
     except Exception:
         return None, None
 
-    mesh_path = project_root() / "assets" / "board" / "label_quad.obj"
-    side = config.piece_radius * 1.25
+    mesh_path = project_root() / "assets" / "board" / "piece_label_disc.obj"
+    side = config.piece_radius * 1.62
     x, y, z = piece_world_xyz
     visual_id = p.createVisualShape(
         p.GEOM_MESH,
@@ -608,7 +788,13 @@ def _create_piece_label(
         physicsClientId=client_id,
     )
     texture_id = p.loadTexture(str(texture_path), physicsClientId=client_id)
-    p.changeVisualShape(label_body_id, -1, textureUniqueId=texture_id, physicsClientId=client_id)
+    p.changeVisualShape(
+        label_body_id,
+        -1,
+        textureUniqueId=texture_id,
+        specularColor=(0.25, 0.18, 0.10),
+        physicsClientId=client_id,
+    )
     constraint_id = p.createConstraint(
         parentBodyUniqueId=piece_body_id,
         parentLinkIndex=-1,
