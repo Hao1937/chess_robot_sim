@@ -43,3 +43,9 @@ python -m unittest discover -s tests -v
 ## 推荐安装urdf-visualizer插件
 
 在vscode安装后，可以直接预览urdf文件的模型
+
+## 如何看可视化
+
+```shell
+python ./scripts/preview_simulation.py
+```
