@@ -9,3 +9,8 @@ __pycache__/
 src/planning/__pycache__/**
 src/common/__pycache__/**
 results/simulation_preview.png
+.vscode/
+results/*.log
+results/simulation_preview*.png
+!results/.gitkeep
+全组TODO时间表.md
