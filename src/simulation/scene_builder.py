@@ -670,7 +670,7 @@ def build_obstacle_preset(obstacle_mode: str, config: Config = DEFAULT_CONFIG) -
     """Return 2-3 preset vertical cylinder obstacles for avoidance demos."""
     presets = {
         "mode_1": [(2, 1), (4, 1)],
-        "mode_2": [(3, 2), (4, 4), (6, 3)],
+        "mode_2": [(3, 2, 5), (4, 4, 5), (6, 3, 5)],
         "mode_3": [(1, 3), (5, 5), (7, 2)],
         "none": [],
     }
@@ -683,11 +683,11 @@ def build_obstacle_preset(obstacle_mode: str, config: Config = DEFAULT_CONFIG) -
             center_xyz=(
                 config.board_origin[0] + col * config.cell_size,
                 config.board_origin[1] + row * config.cell_size,
-                config.z_board,
+                config.z_board + z * config.cell_size
             ),
             radius=config.inflated_piece_radius,
-            height=0.08,
+            height=0.32,
             dynamic=False,
         )
-        for index, (col, row) in enumerate(cells)
+        for index, (col, row, z) in enumerate(cells)
     ]

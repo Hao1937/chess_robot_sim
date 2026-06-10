@@ -19,7 +19,7 @@ def load_robot(urdf_path: str | None = None) -> RobotHandle:
         return RobotHandle(robot_id=1, end_effector_id=6, joint_indices=(0, 1, 2, 3, 4, 5))
 
     model_path = urdf_path or str(project_root() / "assets" / "ur5" / "ur5_joint_limited_robot.urdf")
-    base_position = _side_middle_base_position(DEFAULT_CONFIG)
+    base_position = Config.base_link_position
     try:
         robot_id = p.loadURDF(
             model_path,
@@ -52,10 +52,3 @@ def load_robot(urdf_path: str | None = None) -> RobotHandle:
     RUNTIME.joint_indices = tuple(joint_indices)
     return RobotHandle(robot_id=robot_id, end_effector_id=end_effector_id, joint_indices=tuple(joint_indices))
 
-
-def _side_middle_base_position(config: Config) -> tuple[float, float, float]:
-    """Place the robot base near the middle of the board's left side."""
-    x0, y0, _ = config.board_origin
-    board_mid_y = y0 + (config.board_rows - 1) * config.cell_size / 2.0
-    side_offset = 5.0 * config.cell_size
-    return (x0 - side_offset, board_mid_y, config.z_board)
