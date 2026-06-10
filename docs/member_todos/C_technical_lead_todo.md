@@ -156,3 +156,21 @@ python -m unittest discover -s tests -v
 python main.py --demo
 python -m compileall .
 ```
+
+## Interactive 主流程接口
+
+C 负责 `main.py` 里的长期会话入口：
+
+```python
+def run_command(command, board, scene, robot, config=DEFAULT_CONFIG) -> dict[str, object]:
+
+def run_interactive(input_func=input, output_func=print, config=DEFAULT_CONFIG, max_steps=None) -> dict[str, object]:
+```
+
+要求：
+
+- `run_interactive()` 只初始化一次 `BoardState`、robot、scene；
+- 每轮调用 A 的 `poll_gui_command()` 获取一条命令；
+- 命令成功执行后调用 `apply_logical_actions()` 更新内存棋盘状态；
+- `quit` / `exit` 退出会话；
+- 不要让 A/B/D 自己复制主循环。

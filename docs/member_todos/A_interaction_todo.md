@@ -2,7 +2,7 @@
 
 你负责目录：`src/interaction/`。
 
-你的模块回答一个问题：**用户输入了一步棋，系统应该生成什么逻辑动作？**
+你的模块回答一个问题：**用户输入了一步棋，系统应该生成什么命令和逻辑动作？**
 
 不要写机器人运动、IK、PyBullet 控制。你只输出 `MoveCommand`、`ValidationResult`、`LogicalAction`，后面由 C/B/D 接。
 
@@ -14,7 +14,7 @@
 | `src/interaction/chinese_notation.py` | 解析红方中文记谱输入 |
 | `src/interaction/board_state.py` | 维护棋盘状态，生成逻辑动作序列 |
 | `src/interaction/chess_rules.py` | 判断简化象棋走法是否合法 |
-| `src/interaction/gui.py` | GUI 输入和 hand_on/hand_off 命令适配 |
+| `src/interaction/gui.py` | 把 GUI/输入事件转换成 `MoveCommand` |
 | `docs/interaction_spec.md` | 记录交互命令格式和 GUI 最小需求 |
 
 ## 必须遵守的接口
@@ -32,6 +32,37 @@
 你输出的动作必须是 `list[LogicalAction]`，不要自己发明新格式。
 
 中文记谱解析必须输出 `MoveCommand`，不要直接输出动作序列。
+
+GUI 也不要自己执行完整 pipeline，只负责把一次用户事件转换成一条 `MoveCommand`。
+
+## GUI / Interactive 接口要求
+
+文件：`src/interaction/gui.py`
+
+必须提供：
+
+```python
+def poll_gui_command(board: BoardState, input_func=input, prompt: str = "move> ") -> MoveCommand | None:
+```
+
+含义：
+
+- GUI 或输入窗口长期存在；
+- 用户没有新操作时返回 `None`；
+- 用户输入 `quit` / `exit` 时返回 `MoveCommand(command_type="quit")`；
+- 用户输入 `A1 B1` 时返回普通 move 命令；
+- 用户输入 `reset`、`hand_on`、`hand_off`、`obstacle_mode 1/2/3` 时返回对应命令；
+- 用户输入 `车二平七` 或 `炮五进四` 时调用 `parse_chinese_move(text, board)`。
+
+主循环由 C 的 `run_interactive()` 控制。A 不要在 GUI 函数里调用 IK、轨迹规划、PyBullet 执行。
+
+保留这两个辅助函数：
+
+```python
+def make_gui_command(from_cell: str, to_cell: str) -> MoveCommand:
+
+def make_safety_command(hand_present: bool) -> MoveCommand:
+```
 
 ## 6/11 周四：模块起步
 
@@ -53,7 +84,7 @@ def parse_command(command_text: str) -> MoveCommand:
 - `hand_off`：人手离开，返回 `MoveCommand(command_type="hand_off")`
 - `obstacle_mode 1/2/3`：障碍预设切换，返回 `MoveCommand(command_type="obstacle_mode", mode="mode_1")` 等
 
-验收：空输入要报错；`A1` 这种只有一个格子的输入要报错；大小写不敏感，`a1 b1` 应转成 `A1 B1`；`obstacle_mode 4` 要报错。
+验收：空输入报错；`A1` 这种只有一个格子的输入报错；大小写不敏感；`obstacle_mode 4` 报错。
 
 ### 2. 完善 `create_initial_board()`
 
@@ -87,9 +118,9 @@ reset 输出：遍历当前棋盘，如果棋子不在初始位置，输出 pick
 
 你要保证：
 
-- `A1 B1` 能生成吃子动作序列。
-- `A1 C1` 如果目标是己方棋子，要返回非法。
-- `reset` 能返回一组 reset 逻辑动作。
+- `A1 B1` 能生成吃子动作序列；
+- `A1 C1` 如果目标是己方棋子，返回非法；
+- `reset` 能返回一组 reset 逻辑动作；
 - 你的代码不改 `main.py`，由 C 接入。
 
 C 会调用：
@@ -97,12 +128,13 @@ C 会调用：
 - `parse_command()`
 - `validate_move()`
 - `make_logical_actions()`
+- `poll_gui_command()`
 
 ## 6/16 周二：P1 功能
 
 ### 1. demo 命令表
 
-在 `docs/interaction_spec.md` 里写清楚：普通走子 demo、吃子 demo、绕障 demo、reset demo、`hand_on` / `hand_off` demo、`obstacle_mode 1/2/3` demo。
+在 `docs/interaction_spec.md` 里写清楚：普通走子 demo、吃子 demo、绕障 demo、reset demo、`hand_on` / `hand_off` demo、`obstacle_mode 1/2/3` demo、interactive 输入方式。
 
 ### 1.1 中文记谱 demo
 
@@ -126,17 +158,6 @@ def parse_chinese_move(text: str, board: BoardState, side: str = "red") -> MoveC
 - 同一路同类棋子如果有多个，必须提示玩家输入 `前` / `后`；
 - 支持 `前车二平七`、`后车二平七` 这种消歧形式；
 - 不支持黑方，不支持完整象棋 AI。
-### 2. 棋盘状态更新接口
-
-建议补函数：
-
-```python
-def apply_logical_actions(board: BoardState, actions: list[LogicalAction]) -> BoardState:
-```
-
-作用：执行 place 后更新棋子所在 cell；被吃棋子进入 `CAPTURED_*`；reset 后棋子回初始位置。
-
-如果新增这个函数，先告诉 C，让 C 更新接口文档和测试。
 
 ## 6/18 周四：P2 功能
 
@@ -146,7 +167,7 @@ def apply_logical_actions(board: BoardState, actions: list[LogicalAction]) -> Bo
 
 文件：`src/interaction/gui.py`
 
-最小目标：能构造 `MoveCommand`；能构造 `hand_on` / `hand_off`；能选择 obstacle mode；能输入 `车二平七` 或 `炮五进四` 并调用 `parse_chinese_move()`；GUI 可以很简陋，可以先用输入框、按钮和下拉框。
+最小目标：能构造 `MoveCommand`；能构造 `hand_on` / `hand_off`；能选择 obstacle mode；能输入 `车二平七` 或 `炮五进四` 并调用 `parse_chinese_move()`；GUI 可以先用输入框、按钮和下拉框。
 
 不需要做：将军判断、胜负判断、完整象棋 AI、全部棋子的复杂限制。
 
@@ -155,7 +176,5 @@ def apply_logical_actions(board: BoardState, actions: list[LogicalAction]) -> Bo
 ```bash
 python -m unittest discover -s tests -v
 python main.py --demo
+python main.py --demo --command "obstacle_mode 2"
 ```
-
-不要改：`main.py`、`src/common/types.py`、`src/common/config.py`、`docs/interface_contract.md`。如果确实需要改，先找 C。
-

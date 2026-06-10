@@ -10,7 +10,7 @@ class Config:
     board_origin: tuple[float, float, float] = (0.0, 0.0, 0.0)
     cell_size: float = 0.06
     z_board: float = 0.0
-    z_grasp: float = 0.0225
+    z_grasp: float = 0.055
     z_safe: float = 0.18
     piece_radius: float = 0.0225
     piece_height: float = 0.018

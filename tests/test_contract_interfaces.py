@@ -7,6 +7,18 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 
+def chinese_rook_move() -> str:
+    return chr(0x8f66) + chr(0x4e8c) + chr(0x5e73) + chr(0x4e03)
+
+
+def chinese_cannon_move() -> str:
+    return chr(0x70ae) + chr(0x4e94) + chr(0x8fdb) + chr(0x56db)
+
+
+def chinese_front_rook_move() -> str:
+    return chr(0x524d) + chinese_rook_move()
+
+
 class ContractInterfaceTests(unittest.TestCase):
     def test_interaction_produces_capture_actions(self):
         from src.common.types import Piece, PieceColor, PieceType
@@ -121,6 +133,51 @@ class ContractInterfaceTests(unittest.TestCase):
         self.assertGreaterEqual(result["trajectory_points"], 1)
         self.assertTrue(result["execution"].success)
 
+    def test_gui_poll_command_returns_none_for_empty_input_and_quit_command(self):
+        from src.interaction.board_state import create_initial_board
+        from src.interaction.gui import poll_gui_command
+
+        board = create_initial_board()
+
+        self.assertIsNone(poll_gui_command(board, input_func=lambda prompt: ""))
+        self.assertEqual(poll_gui_command(board, input_func=lambda prompt: "quit").command_type, "quit")
+
+    def test_gui_poll_command_parses_coordinate_and_chinese_input(self):
+        from src.interaction.board_state import create_initial_board
+        from src.interaction.gui import poll_gui_command
+
+        board = create_initial_board()
+        board.pieces["B1"] = board.pieces.pop("A1")
+        board.pieces["B1"] = type(board.pieces["B1"])(
+            piece_id="red_rook_2",
+            kind=board.pieces["B1"].kind,
+            color=board.pieces["B1"].color,
+            cell="B1",
+        )
+
+        coordinate = poll_gui_command(board, input_func=lambda prompt: "A1 B1")
+        chinese = poll_gui_command(board, input_func=lambda prompt: chinese_rook_move())
+
+        self.assertEqual(coordinate.from_cell, "A1")
+        self.assertEqual(coordinate.to_cell, "B1")
+        self.assertEqual(chinese.from_cell, "B1")
+        self.assertEqual(chinese.to_cell, "G1")
+
+    def test_interactive_mode_processes_multiple_commands_in_one_session(self):
+        from main import run_interactive
+
+        commands = iter(["A1 B1", "obstacle_mode 2", "quit"])
+        messages: list[str] = []
+
+        session = run_interactive(
+            input_func=lambda prompt: next(commands),
+            output_func=messages.append,
+        )
+
+        self.assertEqual([result["command"].command_type for result in session["results"]], ["move", "obstacle_mode"])
+        self.assertEqual(session["board"].pieces["B1"].piece_id, "red_rook_1")
+        self.assertTrue(any("interactive session ended" in message for message in messages))
+
     def test_red_chinese_notation_rook_horizontal_move(self):
         from src.common.types import BoardState, Piece, PieceColor, PieceType
         from src.interaction.chinese_notation import parse_chinese_move
@@ -131,7 +188,7 @@ class ContractInterfaceTests(unittest.TestCase):
             }
         )
 
-        command = parse_chinese_move("车二平七", board)
+        command = parse_chinese_move(chinese_rook_move(), board)
 
         self.assertEqual(command.command_type, "move")
         self.assertEqual(command.from_cell, "B1")
@@ -147,7 +204,7 @@ class ContractInterfaceTests(unittest.TestCase):
             }
         )
 
-        command = parse_chinese_move("炮五进四", board)
+        command = parse_chinese_move(chinese_cannon_move(), board)
 
         self.assertEqual(command.from_cell, "E3")
         self.assertEqual(command.to_cell, "E7")
@@ -163,10 +220,10 @@ class ContractInterfaceTests(unittest.TestCase):
             }
         )
 
-        with self.assertRaisesRegex(ValueError, "前/后"):
-            parse_chinese_move("车二平七", board)
+        with self.assertRaisesRegex(ValueError, "ambiguous"):
+            parse_chinese_move(chinese_rook_move(), board)
 
-        command = parse_chinese_move("前车二平七", board)
+        command = parse_chinese_move(chinese_front_rook_move(), board)
         self.assertEqual(command.from_cell, "B4")
         self.assertEqual(command.to_cell, "G4")
 
