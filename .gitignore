@@ -8,3 +8,4 @@ __pycache__/
 .venv/**
 src/planning/__pycache__/**
 src/common/__pycache__/**
+results/simulation_preview.png
