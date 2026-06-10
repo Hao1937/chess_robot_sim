@@ -8,17 +8,19 @@ class Config:
     board_cols: int = 9
     board_rows: int = 10
     board_origin: tuple[float, float, float] = (0.0, 0.0, 0.0)
-    cell_size: float = 0.12
+    cell_size: float = 0.04
     z_board: float = 0.0
-    z_grasp: float = 0.045
-    z_safe: float = 0.36
-    piece_radius: float = 0.045
-    piece_height: float = 0.036
-    end_effector_radius: float = 0.04
-    safety_margin: float = 0.03
+    z_grasp: float = 0.015
+    z_safe: float = 0.12
+    piece_radius: float = 0.015
+    piece_height: float = 0.012
+    end_effector_radius: float = 0.012
+    safety_margin: float = 0.01
     home_pose: tuple[float, ...] = (0.0, -0.8, 1.2, -0.4, 0.0, 0.0)
     fast_speed_scale: float = 1.0
     safe_speed_scale: float = 0.35
+    #base_link_position: tuple[float, float, float] = ()
+    #base_link_orientation_rpy: tuple[float, float, float]=()
 
     @property
     def inflated_piece_radius(self) -> float:
