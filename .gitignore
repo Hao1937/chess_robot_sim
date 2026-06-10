@@ -5,3 +5,6 @@ __pycache__/
 *.py[cod]
 *$py.class
 全组TODO时间表.md
+.venv/**
+src/planning/__pycache__/**
+src/common/__pycache__/**

@@ -19,8 +19,8 @@ class Config:
     home_pose: tuple[float, ...] = (0.0, -0.8, 1.2, -0.4, 0.0, 0.0)
     fast_speed_scale: float = 1.0
     safe_speed_scale: float = 0.35
-    #base_link_position: tuple[float, float, float] = ()
-    #base_link_orientation_rpy: tuple[float, float, float]=()
+    base_link_position: tuple[float, float, float] = (-0.2, 0.18, 0.0)
+    base_link_orientation_rpy: tuple[float, float, float]=(0, 0, 0)
 
     @property
     def inflated_piece_radius(self) -> float:

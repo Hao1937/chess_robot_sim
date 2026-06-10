@@ -51,7 +51,7 @@ def save_preview_image(output_path: Path, width: int = 1920, height: int = 1080)
         physicsClientId=RUNTIME.client_id,
     )
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    image = np.reshape(rgba, (height, width, 4))
+    image = np.reshape(rgba, (height, width, 4)).astype(np.uint8)
     mpimg.imsave(output_path, image)
 
 

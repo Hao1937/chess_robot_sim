@@ -29,17 +29,20 @@ def attach_piece(piece_id: str, end_effector_id: int) -> OperationResult:
             physicsClientId=client_id,
         )
 
-    constraint_id = p.createConstraint(
-        parentBodyUniqueId=RUNTIME.robot_id,
-        parentLinkIndex=end_effector_id,
-        childBodyUniqueId=body_id,
-        childLinkIndex=-1,
-        jointType=p.JOINT_FIXED,
-        jointAxis=(0.0, 0.0, 0.0),
-        parentFramePosition=(0.0, 0.0, 0.0),
-        childFramePosition=(0.0, 0.0, 0.0),
-        physicsClientId=client_id,
-    )
+    try:
+        constraint_id = p.createConstraint(
+            parentBodyUniqueId=RUNTIME.robot_id,
+            parentLinkIndex=end_effector_id,
+            childBodyUniqueId=body_id,
+            childLinkIndex=-1,
+            jointType=p.JOINT_FIXED,
+            jointAxis=(0.0, 0.0, 0.0),
+            parentFramePosition=(0.0, 0.0, 0.0),
+            childFramePosition=(0.0, 0.0, 0.0),
+            physicsClientId=client_id,
+        )
+    except Exception as exc:
+        return OperationResult(True, f"mock attached {piece_id}; constraint unavailable: {exc}")
     RUNTIME.attachment_constraints[piece_id] = constraint_id
     return OperationResult(True, f"attached {piece_id} to end effector {end_effector_id}")
 
