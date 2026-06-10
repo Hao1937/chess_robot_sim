@@ -1,16 +1,57 @@
 from __future__ import annotations
 
+import math
+from pathlib import Path
+import tempfile
+
 from src.common.config import DEFAULT_CONFIG, Config
 from src.common.types import Obstacle, SceneHandle
 from src.planning.chessboard_mapping import cell_to_world
-from src.simulation._runtime import RUNTIME, clear_scene_bodies, ensure_client, p
+from src.simulation._runtime import RUNTIME, clear_scene_bodies, ensure_client, p, project_root
 
 
-_DEMO_PIECES = (
-    ("A1", "red_rook_1", "red", "\u8f66"),
-    ("B1", "black_horse_1", "black", "\u9a6c"),
-    ("C1", "red_cannon_1", "red", "\u70ae"),
+_INITIAL_PIECES = (
+    ("A1", "red_rook_1", "red", "\u8eca"),
+    ("B1", "red_horse_1", "red", "\u99ac"),
+    ("C1", "red_elephant_1", "red", "\u76f8"),
+    ("D1", "red_advisor_1", "red", "\u4ed5"),
+    ("E1", "red_general", "red", "\u5e25"),
+    ("F1", "red_advisor_2", "red", "\u4ed5"),
+    ("G1", "red_elephant_2", "red", "\u76f8"),
+    ("H1", "red_horse_2", "red", "\u99ac"),
+    ("I1", "red_rook_2", "red", "\u8eca"),
+    ("B3", "red_cannon_1", "red", "\u70ae"),
+    ("H3", "red_cannon_2", "red", "\u70ae"),
+    ("A4", "red_soldier_1", "red", "\u5175"),
+    ("C4", "red_soldier_2", "red", "\u5175"),
+    ("E4", "red_soldier_3", "red", "\u5175"),
+    ("G4", "red_soldier_4", "red", "\u5175"),
+    ("I4", "red_soldier_5", "red", "\u5175"),
+    ("A10", "black_rook_1", "black", "\u8eca"),
+    ("B10", "black_horse_1", "black", "\u99ac"),
+    ("C10", "black_elephant_1", "black", "\u8c61"),
+    ("D10", "black_advisor_1", "black", "\u58eb"),
+    ("E10", "black_general", "black", "\u5c07"),
+    ("F10", "black_advisor_2", "black", "\u58eb"),
+    ("G10", "black_elephant_2", "black", "\u8c61"),
+    ("H10", "black_horse_2", "black", "\u99ac"),
+    ("I10", "black_rook_2", "black", "\u8eca"),
+    ("B8", "black_cannon_1", "black", "\u70ae"),
+    ("H8", "black_cannon_2", "black", "\u70ae"),
+    ("A7", "black_soldier_1", "black", "\u5352"),
+    ("C7", "black_soldier_2", "black", "\u5352"),
+    ("E7", "black_soldier_3", "black", "\u5352"),
+    ("G7", "black_soldier_4", "black", "\u5352"),
+    ("I7", "black_soldier_5", "black", "\u5352"),
 )
+
+_BOARD_LINE_COLOR = (0.18, 0.10, 0.04)
+_BOARD_TEXT_COLOR = (0.24, 0.11, 0.03)
+_PIECE_WOOD_COLOR = (0.78, 0.56, 0.30, 1.0)
+_PIECE_SIDE_COLOR = (0.55, 0.34, 0.16, 1.0)
+_PIECE_TOP_COLOR = (0.88, 0.68, 0.40, 1.0)
+_RED_TEXT_COLOR = (0.75, 0.02, 0.02)
+_BLACK_TEXT_COLOR = (0.02, 0.02, 0.02)
 
 
 def build_scene(config: Config = DEFAULT_CONFIG, obstacle_mode: str = "mode_1") -> SceneHandle:
@@ -34,11 +75,11 @@ def build_scene(config: Config = DEFAULT_CONFIG, obstacle_mode: str = "mode_1") 
     clear_scene_bodies()
     _create_table(config, client_id)
     board_id = _create_board(config, client_id)
-    _draw_board_grid(config, client_id)
+    _draw_chinese_chess_board(config, client_id)
     _create_captured_area(config, client_id)
 
     piece_ids: dict[str, int] = {}
-    for cell, piece_id, color, label in _DEMO_PIECES:
+    for cell, piece_id, color, label in _INITIAL_PIECES:
         body_id = _create_piece(cell, piece_id, color, label, config, client_id)
         piece_ids[cell] = body_id
 
@@ -186,20 +227,258 @@ def _create_board(config: Config, client_id: int) -> int:
     return body_id
 
 
-def _draw_board_grid(config: Config, client_id: int) -> None:
+def _draw_chinese_chess_board(config: Config, client_id: int) -> None:
     x0, y0, _ = config.board_origin
-    z = config.z_board + 0.001
+    z = config.z_board + 0.003
     x_max = x0 + (config.board_cols - 1) * config.cell_size
     y_max = y0 + (config.board_rows - 1) * config.cell_size
-    color = (0.05, 0.05, 0.05)
-    for col in range(config.board_cols):
-        x = x0 + col * config.cell_size
-        debug_id = p.addUserDebugLine((x, y0, z), (x, y_max, z), color, physicsClientId=client_id)
-        RUNTIME.debug_item_ids.append(debug_id)
+
+    # Horizontal rank lines run across the whole board.
     for row in range(config.board_rows):
         y = y0 + row * config.cell_size
-        debug_id = p.addUserDebugLine((x0, y, z), (x_max, y, z), color, physicsClientId=client_id)
-        RUNTIME.debug_item_ids.append(debug_id)
+        _add_board_line((x0, y, z), (x_max, y, z), client_id)
+
+    # File lines are broken at the river, except for the two outer borders.
+    for col in range(config.board_cols):
+        x = x0 + col * config.cell_size
+        if col in {0, config.board_cols - 1}:
+            _add_board_line((x, y0, z), (x, y_max, z), client_id)
+        else:
+            _add_board_line((x, y0, z), (x, y0 + 4 * config.cell_size, z), client_id)
+            _add_board_line((x, y0 + 5 * config.cell_size, z), (x, y_max, z), client_id)
+
+    _draw_outer_border(config, client_id, z)
+    _draw_palaces(config, client_id, z)
+    _draw_position_marks(config, client_id, z)
+    _create_river_labels(config, client_id, z + 0.002)
+
+
+def _add_board_line(
+    start_xyz: tuple[float, float, float],
+    end_xyz: tuple[float, float, float],
+    client_id: int,
+    width: float = 1.6,
+) -> None:
+    sx, sy, sz = start_xyz
+    ex, ey, ez = end_xyz
+    dx = ex - sx
+    dy = ey - sy
+    length = (dx * dx + dy * dy) ** 0.5
+    if length <= 0.0:
+        return
+
+    line_width = width * 0.0015
+    line_height = 0.0015
+    visual_id = p.createVisualShape(
+        p.GEOM_BOX,
+        halfExtents=(length / 2.0, line_width / 2.0, line_height / 2.0),
+        rgbaColor=(*_BOARD_LINE_COLOR, 1.0),
+        physicsClientId=client_id,
+    )
+    yaw = math.atan2(dy, dx)
+    body_id = p.createMultiBody(
+        baseMass=0.0,
+        baseCollisionShapeIndex=-1,
+        baseVisualShapeIndex=visual_id,
+        basePosition=((sx + ex) / 2.0, (sy + ey) / 2.0, (sz + ez) / 2.0),
+        baseOrientation=p.getQuaternionFromEuler((0.0, 0.0, yaw)),
+        physicsClientId=client_id,
+    )
+    RUNTIME.scene_body_ids.append(body_id)
+
+
+def _draw_outer_border(config: Config, client_id: int, z: float) -> None:
+    x0, y0, _ = config.board_origin
+    x_max = x0 + (config.board_cols - 1) * config.cell_size
+    y_max = y0 + (config.board_rows - 1) * config.cell_size
+    inset = config.cell_size * 0.11
+    corners = [
+        (x0 - inset, y0 - inset, z),
+        (x_max + inset, y0 - inset, z),
+        (x_max + inset, y_max + inset, z),
+        (x0 - inset, y_max + inset, z),
+    ]
+    for start, end in zip(corners, corners[1:] + corners[:1]):
+        _add_board_line(start, end, client_id, width=2.6)
+
+
+def _draw_palaces(config: Config, client_id: int, z: float) -> None:
+    x0, y0, _ = config.board_origin
+    c = config.cell_size
+    _add_board_line((x0 + 3 * c, y0, z), (x0 + 5 * c, y0 + 2 * c, z), client_id)
+    _add_board_line((x0 + 5 * c, y0, z), (x0 + 3 * c, y0 + 2 * c, z), client_id)
+    _add_board_line((x0 + 3 * c, y0 + 7 * c, z), (x0 + 5 * c, y0 + 9 * c, z), client_id)
+    _add_board_line((x0 + 5 * c, y0 + 7 * c, z), (x0 + 3 * c, y0 + 9 * c, z), client_id)
+
+
+def _draw_position_marks(config: Config, client_id: int, z: float) -> None:
+    mark_cells = [(1, 2), (7, 2), (1, 7), (7, 7)]
+    mark_cells.extend((col, 3) for col in (0, 2, 4, 6, 8))
+    mark_cells.extend((col, 6) for col in (0, 2, 4, 6, 8))
+    for col, row in mark_cells:
+        _draw_cross_mark(col, row, config, client_id, z)
+
+
+def _draw_cross_mark(col: int, row: int, config: Config, client_id: int, z: float) -> None:
+    x0, y0, _ = config.board_origin
+    x = x0 + col * config.cell_size
+    y = y0 + row * config.cell_size
+    gap = config.cell_size * 0.12
+    length = config.cell_size * 0.26
+    corners = [
+        (-1, -1),
+        (-1, 1),
+        (1, -1),
+        (1, 1),
+    ]
+    for sx, sy in corners:
+        if not 0 <= col + sx <= config.board_cols - 1:
+            continue
+        _add_board_line((x + sx * gap, y + sy * gap, z), (x + sx * (gap + length), y + sy * gap, z), client_id, width=1.2)
+        _add_board_line((x + sx * gap, y + sy * gap, z), (x + sx * gap, y + sy * (gap + length), z), client_id, width=1.2)
+
+
+def _add_board_text(
+    text: str,
+    position_xyz: tuple[float, float, float],
+    text_size: float,
+    client_id: int,
+) -> None:
+    debug_id = p.addUserDebugText(
+        text,
+        position_xyz,
+        textColorRGB=_BOARD_TEXT_COLOR,
+        textSize=text_size,
+        physicsClientId=client_id,
+    )
+    RUNTIME.debug_item_ids.append(debug_id)
+
+
+def _create_river_labels(config: Config, client_id: int, z: float) -> None:
+    try:
+        chuhe_texture = _make_label_texture("\u695a\u6cb3", "chuhe")
+        hanjie_texture = _make_label_texture("\u6f22\u754c", "hanjie")
+    except Exception:
+        x0, y0, _ = config.board_origin
+        _add_board_text("\u695a\u6cb3", (x0 + 1.6 * config.cell_size, y0 + 4.42 * config.cell_size, z), 0.9, client_id)
+        _add_board_text("\u6f22\u754c", (x0 + 5.6 * config.cell_size, y0 + 4.42 * config.cell_size, z), 0.9, client_id)
+        return
+
+    x0, y0, _ = config.board_origin
+    river_y = y0 + 4.5 * config.cell_size
+    label_width = 2.0 * config.cell_size
+    label_height = 0.72 * config.cell_size
+    _create_label_plate(
+        chuhe_texture,
+        (x0 + 2.0 * config.cell_size, river_y, z),
+        label_width,
+        label_height,
+        client_id,
+        yaw=0.0,
+    )
+    _create_label_plate(
+        hanjie_texture,
+        (x0 + 6.0 * config.cell_size, river_y, z),
+        label_width,
+        label_height,
+        client_id,
+        yaw=math.pi,
+    )
+
+
+def _make_label_texture(text: str, name: str) -> Path:
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from matplotlib.font_manager import FontProperties
+
+    texture_dir = Path(tempfile.gettempdir()) / "chess_robot_sim_textures"
+    texture_dir.mkdir(parents=True, exist_ok=True)
+    texture_path = texture_dir / f"{name}.png"
+
+    font_path = _find_chinese_font()
+    font = FontProperties(fname=str(font_path), size=64) if font_path else None
+    background = (0.93, 0.88, 0.74, 1.0)
+    text_color = (0.24, 0.11, 0.03, 1.0)
+
+    fig = plt.figure(figsize=(3.0, 1.0), dpi=120, facecolor=background)
+    ax = fig.add_axes((0, 0, 1, 1))
+    ax.set_axis_off()
+    ax.set_facecolor(background)
+    ax.text(0.5, 0.5, text, ha="center", va="center", color=text_color, fontproperties=font)
+    fig.savefig(texture_path, dpi=120, facecolor=background)
+    plt.close(fig)
+    return texture_path
+
+
+def _make_piece_label_texture(text: str, color: str, piece_id: str) -> Path:
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from matplotlib.font_manager import FontProperties
+
+    texture_dir = Path(tempfile.gettempdir()) / "chess_robot_sim_textures" / "pieces"
+    texture_dir.mkdir(parents=True, exist_ok=True)
+    texture_path = texture_dir / f"{piece_id}.png"
+
+    font_path = _find_chinese_font()
+    font = FontProperties(fname=str(font_path), size=82) if font_path else None
+    background = _PIECE_TOP_COLOR
+    text_color = (0.86, 0.0, 0.0, 1.0) if color == "red" else (0.0, 0.0, 0.0, 1.0)
+
+    fig = plt.figure(figsize=(1.0, 1.0), dpi=128, facecolor=background)
+    ax = fig.add_axes((0, 0, 1, 1))
+    ax.set_axis_off()
+    ax.set_facecolor(background)
+    ax.text(0.5, 0.5, text, ha="center", va="center", color=text_color, fontproperties=font)
+    fig.savefig(texture_path, dpi=128, facecolor=background)
+    plt.close(fig)
+    return texture_path
+
+
+def _find_chinese_font() -> Path | None:
+    candidates = [
+        Path("C:/Windows/Fonts/simkai.ttf"),
+        Path("C:/Windows/Fonts/simhei.ttf"),
+        Path("C:/Windows/Fonts/msyh.ttc"),
+        Path("C:/Windows/Fonts/simsun.ttc"),
+    ]
+    for path in candidates:
+        if path.exists():
+            return path
+    return None
+
+
+def _create_label_plate(
+    texture_path: Path,
+    center_xyz: tuple[float, float, float],
+    width: float,
+    height: float,
+    client_id: int,
+    yaw: float = 0.0,
+) -> int:
+    mesh_path = project_root() / "assets" / "board" / "label_quad.obj"
+    visual_id = p.createVisualShape(
+        p.GEOM_MESH,
+        fileName=str(mesh_path),
+        meshScale=(width, height, 1.0),
+        rgbaColor=(1.0, 1.0, 1.0, 1.0),
+        physicsClientId=client_id,
+    )
+    body_id = p.createMultiBody(
+        baseMass=0.0,
+        baseCollisionShapeIndex=-1,
+        baseVisualShapeIndex=visual_id,
+        basePosition=center_xyz,
+        baseOrientation=p.getQuaternionFromEuler((0.0, 0.0, yaw)),
+        physicsClientId=client_id,
+    )
+    texture_id = p.loadTexture(str(texture_path), physicsClientId=client_id)
+    p.changeVisualShape(body_id, -1, textureUniqueId=texture_id, physicsClientId=client_id)
+    RUNTIME.scene_body_ids.append(body_id)
+    return body_id
 
 
 def _create_captured_area(config: Config, client_id: int) -> int:
@@ -223,6 +502,7 @@ def _create_captured_area(config: Config, client_id: int) -> int:
         physicsClientId=client_id,
     )
     RUNTIME.scene_body_ids.append(body_id)
+    _add_board_text("\u5403\u5b50\u533a", (center[0] - 0.018, center[1] - 0.08, config.z_board + 0.012), 0.55, client_id)
     return body_id
 
 
@@ -235,12 +515,11 @@ def _create_piece(
     client_id: int,
 ) -> int:
     x, y, z = cell_to_world(cell, config)
-    rgba = (0.86, 0.05, 0.05, 1.0) if color == "red" else (0.02, 0.02, 0.02, 1.0)
     visual_id = p.createVisualShape(
         p.GEOM_CYLINDER,
         radius=config.piece_radius,
         length=config.piece_height,
-        rgbaColor=rgba,
+        rgbaColor=_PIECE_WOOD_COLOR,
         physicsClientId=client_id,
     )
     collision_id = p.createCollisionShape(
@@ -257,19 +536,92 @@ def _create_piece(
         physicsClientId=client_id,
     )
     p.changeDynamics(body_id, -1, lateralFriction=0.9, physicsClientId=client_id)
-    text_id = p.addUserDebugText(
-        label,
-        (x - config.piece_radius / 2.0, y - config.piece_radius / 2.0, z + config.piece_height + 0.004),
-        textColorRGB=(1.0, 1.0, 1.0) if color == "black" else (0.6, 0.0, 0.0),
-        textSize=0.7,
+    top_visual_id = p.createVisualShape(
+        p.GEOM_CYLINDER,
+        radius=config.piece_radius * 0.94,
+        length=config.piece_height * 0.12,
+        rgbaColor=_PIECE_TOP_COLOR,
         physicsClientId=client_id,
     )
+    top_id = p.createMultiBody(
+        baseMass=0.0,
+        baseCollisionShapeIndex=-1,
+        baseVisualShapeIndex=top_visual_id,
+        basePosition=(x, y, z + config.piece_height + 0.001),
+        physicsClientId=client_id,
+    )
+    constraint_id = p.createConstraint(
+        parentBodyUniqueId=body_id,
+        parentLinkIndex=-1,
+        childBodyUniqueId=top_id,
+        childLinkIndex=-1,
+        jointType=p.JOINT_FIXED,
+        jointAxis=(0.0, 0.0, 0.0),
+        parentFramePosition=(0.0, 0.0, config.piece_height / 2.0 + 0.001),
+        childFramePosition=(0.0, 0.0, 0.0),
+        physicsClientId=client_id,
+    )
+    label_id, label_constraint_id = _create_piece_label(body_id, piece_id, label, color, (x, y, z), config, client_id)
     RUNTIME.scene_body_ids.append(body_id)
-    RUNTIME.debug_item_ids.append(text_id)
+    RUNTIME.scene_body_ids.append(top_id)
+    RUNTIME.attachment_constraints[f"{piece_id}_top_cap"] = constraint_id
+    if label_id is not None:
+        RUNTIME.scene_body_ids.append(label_id)
+    if label_constraint_id is not None:
+        RUNTIME.attachment_constraints[f"{piece_id}_label"] = label_constraint_id
     RUNTIME.piece_body_ids[piece_id] = body_id
     RUNTIME.piece_cells[piece_id] = cell
     RUNTIME.piece_ids_by_cell[cell] = piece_id
     return body_id
+
+
+def _create_piece_label(
+    piece_body_id: int,
+    piece_id: str,
+    label: str,
+    color: str,
+    piece_world_xyz: tuple[float, float, float],
+    config: Config,
+    client_id: int,
+) -> tuple[int | None, int | None]:
+    try:
+        texture_path = _make_piece_label_texture(label, color, piece_id)
+    except Exception:
+        return None, None
+
+    mesh_path = project_root() / "assets" / "board" / "label_quad.obj"
+    side = config.piece_radius * 1.25
+    x, y, z = piece_world_xyz
+    visual_id = p.createVisualShape(
+        p.GEOM_MESH,
+        fileName=str(mesh_path),
+        meshScale=(side, side, 1.0),
+        rgbaColor=(1.0, 1.0, 1.0, 1.0),
+        physicsClientId=client_id,
+    )
+    label_body_id = p.createMultiBody(
+        baseMass=0.001,
+        baseCollisionShapeIndex=-1,
+        baseVisualShapeIndex=visual_id,
+        basePosition=(x, y, z + config.piece_height + 0.004),
+        baseOrientation=p.getQuaternionFromEuler((0.0, 0.0, math.pi if color == "black" else 0.0)),
+        physicsClientId=client_id,
+    )
+    texture_id = p.loadTexture(str(texture_path), physicsClientId=client_id)
+    p.changeVisualShape(label_body_id, -1, textureUniqueId=texture_id, physicsClientId=client_id)
+    constraint_id = p.createConstraint(
+        parentBodyUniqueId=piece_body_id,
+        parentLinkIndex=-1,
+        childBodyUniqueId=label_body_id,
+        childLinkIndex=-1,
+        jointType=p.JOINT_FIXED,
+        jointAxis=(0.0, 0.0, 0.0),
+        parentFramePosition=(0.0, 0.0, config.piece_height / 2.0 + 0.004),
+        childFramePosition=(0.0, 0.0, 0.0),
+        childFrameOrientation=p.getQuaternionFromEuler((0.0, 0.0, math.pi if color == "black" else 0.0)),
+        physicsClientId=client_id,
+    )
+    return label_body_id, constraint_id
 
 
 def _create_obstacle_body(obstacle: Obstacle, client_id: int) -> int:
