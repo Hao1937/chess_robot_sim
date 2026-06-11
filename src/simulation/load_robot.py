@@ -1,12 +1,96 @@
 from __future__ import annotations
 
+from src.common.config import DEFAULT_CONFIG, Config
 from src.common.types import RobotHandle
+from src.simulation._runtime import RUNTIME, ensure_client, p, project_root
 
 
 def load_robot(urdf_path: str | None = None) -> RobotHandle:
-    """Load a robot model.
+    """Load the UR5 model and return the ids needed by downstream modules.
 
-    The skeleton returns a mock handle. B can replace the body with PyBullet
-    loading while keeping the same return type.
+    When PyBullet is unavailable, this keeps the old mock-safe behavior so the
+    interface tests and planning pipeline can still run.
     """
-    return RobotHandle(robot_id=1, end_effector_id=6, joint_indices=(0, 1, 2, 3, 4, 5))
+    if p is None:
+        return RobotHandle(robot_id=1, end_effector_id=6, joint_indices=(0, 1, 2, 3, 4, 5))
+
+    client_id = ensure_client()
+    if client_id is None:
+        return RobotHandle(robot_id=1, end_effector_id=6, joint_indices=(0, 1, 2, 3, 4, 5))
+
+    model_path = urdf_path or str(project_root() / "assets" / "ur5" / "ur5_joint_limited_robot.urdf")
+    base_position = Config.base_link_position
+    try:
+        robot_id = p.loadURDF(
+            model_path,
+            basePosition=base_position,
+            baseOrientation=p.getQuaternionFromEuler((0.0, 0.0, 0.0)),
+            useFixedBase=True,
+            flags=p.URDF_USE_SELF_COLLISION,
+            physicsClientId=client_id,
+        )
+    except Exception:
+        return RobotHandle(robot_id=1, end_effector_id=6, joint_indices=(0, 1, 2, 3, 4, 5))
+
+    joint_indices: list[int] = []
+    end_effector_id = -1
+    preferred_ee_names = {"suction_cup_link", "tool0", "ee_link", "wrist_3_link"}
+    for joint_index in range(p.getNumJoints(robot_id, physicsClientId=client_id)):
+        joint_info = p.getJointInfo(robot_id, joint_index, physicsClientId=client_id)
+        joint_type = joint_info[2]
+        link_name = joint_info[12].decode("utf-8")
+        if joint_type in {p.JOINT_REVOLUTE, p.JOINT_PRISMATIC}:
+            joint_indices.append(joint_index)
+        if link_name in preferred_ee_names:
+            end_effector_id = joint_index
+
+    if end_effector_id < 0:
+        end_effector_id = p.getNumJoints(robot_id, physicsClientId=client_id) - 1
+
+    _apply_robot_visual_style(robot_id, client_id)
+    RUNTIME.robot_id = robot_id
+    RUNTIME.end_effector_id = end_effector_id
+    RUNTIME.joint_indices = tuple(joint_indices)
+    return RobotHandle(robot_id=robot_id, end_effector_id=end_effector_id, joint_indices=tuple(joint_indices))
+
+
+
+def _apply_robot_visual_style(robot_id: int, client_id: int) -> None:
+    """Give the UR5 readable industrial colors when mesh materials are absent."""
+    if p is None:
+        return
+
+    link_colors = {
+        "base_link": ((0.20, 0.21, 0.21, 1.0), (0.22, 0.22, 0.22)),
+        "shoulder_link": ((0.35, 0.36, 0.35, 1.0), (0.20, 0.20, 0.20)),
+        "upper_arm_link": ((0.74, 0.75, 0.72, 1.0), (0.18, 0.18, 0.18)),
+        "forearm_link": ((0.70, 0.71, 0.68, 1.0), (0.18, 0.18, 0.18)),
+        "wrist_1_link": ((0.28, 0.29, 0.28, 1.0), (0.18, 0.18, 0.18)),
+        "wrist_2_link": ((0.82, 0.55, 0.20, 1.0), (0.20, 0.15, 0.08)),
+        "wrist_3_link": ((0.28, 0.29, 0.28, 1.0), (0.18, 0.18, 0.18)),
+        "ee_link": ((0.18, 0.18, 0.17, 1.0), (0.08, 0.08, 0.08)),
+        "tool0": ((0.18, 0.18, 0.17, 1.0), (0.08, 0.08, 0.08)),
+        "suction_cup_link": ((0.05, 0.05, 0.05, 1.0), (0.06, 0.06, 0.06)),
+    }
+
+    p.changeVisualShape(
+        robot_id,
+        -1,
+        rgbaColor=link_colors["base_link"][0],
+        specularColor=link_colors["base_link"][1],
+        physicsClientId=client_id,
+    )
+    for joint_index in range(p.getNumJoints(robot_id, physicsClientId=client_id)):
+        joint_info = p.getJointInfo(robot_id, joint_index, physicsClientId=client_id)
+        link_name = joint_info[12].decode("utf-8")
+        style = link_colors.get(link_name)
+        if style is None:
+            continue
+        rgba_color, specular_color = style
+        p.changeVisualShape(
+            robot_id,
+            joint_index,
+            rgbaColor=rgba_color,
+            specularColor=specular_color,
+            physicsClientId=client_id,
+        )

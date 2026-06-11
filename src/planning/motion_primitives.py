@@ -10,13 +10,19 @@ def build_motion_primitives(actions: list[LogicalAction], config: Config = DEFAU
     primitives: list[MotionPrimitive] = []
     for action in actions:
         if action.action_type == "pick":
+            world = cell_to_world(action.cell, config)
             primitives.append(MotionPrimitive("approach", action.cell, cell_above_world(action.cell, config), "fast"))
-            primitives.append(MotionPrimitive("descend", action.cell, cell_to_world(action.cell, config), "safe"))
+            primitives.append(MotionPrimitive("descend", action.cell, (world[0], world[1], world[2] + config.z_grasp), "safe"))
+            primitives.append(MotionPrimitive("grasp", action.cell, (world[0], world[1], world[2] + config.z_grasp), "safe"))
             primitives.append(MotionPrimitive("lift", action.cell, cell_above_world(action.cell, config), "safe"))
         elif action.action_type == "place":
+            world = cell_to_world(action.cell, config)
             primitives.append(MotionPrimitive("transfer", action.cell, cell_above_world(action.cell, config), "fast"))
-            primitives.append(MotionPrimitive("descend", action.cell, cell_to_world(action.cell, config), "safe"))
+            primitives.append(MotionPrimitive("descend", action.cell, (world[0], world[1], world[2] + config.z_grasp), "safe"))
+            primitives.append(MotionPrimitive("detach", action.cell, (world[0], world[1], world[2] + config.z_grasp), "safe"))
             primitives.append(MotionPrimitive("retreat", action.cell, cell_above_world(action.cell, config), "safe"))
         elif action.action_type == "safety_pause":
             primitives.append(MotionPrimitive("pause", action.cell, (0.0, 0.0, config.z_safe), "safe"))
+        else:
+            print('Error, primitives not defined!')
     return primitives
