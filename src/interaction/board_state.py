@@ -27,6 +27,9 @@ def make_logical_actions(board: BoardState, command: MoveCommand) -> list[Logica
 
     actions: list[LogicalAction] = []
     target_piece = board.pieces.get(command.to_cell)
+    if target_piece is not None and target_piece.color == moving_piece.color:
+        raise ValueError("target cell contains friendly piece")
+
     if target_piece is not None and target_piece.color != moving_piece.color:
         captured_cell = _next_captured_cell(board, target_piece.color)
         actions.extend([
