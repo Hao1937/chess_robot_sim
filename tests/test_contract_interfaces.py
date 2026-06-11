@@ -63,6 +63,23 @@ class ContractInterfaceTests(unittest.TestCase):
         self.assertEqual(len(trajectory.joint_waypoints), len(trajectory.speed_profile))
         self.assertIn("safe", trajectory.speed_profile)
 
+    def test_solve_ik_uses_analytic_backend_without_pybullet(self):
+        import math
+
+        from src.common.config import DEFAULT_CONFIG
+        from src.planning.ik_solver import solve_ik
+
+        target = (
+            DEFAULT_CONFIG.base_link_position[0] + 0.35,
+            DEFAULT_CONFIG.base_link_position[1] + 0.05,
+            DEFAULT_CONFIG.base_link_position[2] + 0.20,
+        )
+        solution = solve_ik(target, DEFAULT_CONFIG)
+
+        self.assertEqual(len(solution), 6)
+        self.assertTrue(all(math.isfinite(theta) for theta in solution))
+        self.assertNotEqual(solution, DEFAULT_CONFIG.home_pose)
+
     def test_simulation_and_control_stubs_share_contract(self):
         from src.common.types import JointTrajectory
         from src.control.controller import execute_trajectory
