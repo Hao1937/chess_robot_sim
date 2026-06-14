@@ -57,7 +57,7 @@ def save_preview_image(output_path: Path, width: int = 1920, height: int = 1080)
 
 def main() -> None:
     robot = load_robot()
-    scene = build_scene(obstacle_mode="mode_2")
+    scene = build_scene(obstacle_mode="mode_3")
     set_human_safety_zone(True)
     for _ in range(60):
         p.stepSimulation(physicsClientId=RUNTIME.client_id)

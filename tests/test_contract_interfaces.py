@@ -131,6 +131,29 @@ class ContractInterfaceTests(unittest.TestCase):
         self.assertGreaterEqual(len(scene.obstacles), 2)
         self.assertTrue(all(obstacle.obstacle_id.startswith("preset_column_") for obstacle in scene.obstacles))
 
+    def test_obstacle_presets_create_demo_gate_and_staggered_pressure_layout(self):
+        from src.common.config import DEFAULT_CONFIG
+        from src.simulation.scene_builder import build_obstacle_preset
+
+        def cells_for(mode: str) -> list[tuple[int, int]]:
+            cells = []
+            for obstacle in build_obstacle_preset(mode, DEFAULT_CONFIG):
+                x, y, _ = obstacle.center_xyz
+                col = round((x - DEFAULT_CONFIG.board_origin[0]) / DEFAULT_CONFIG.cell_size)
+                row = round((y - DEFAULT_CONFIG.board_origin[1]) / DEFAULT_CONFIG.cell_size)
+                cells.append((col, row))
+            return cells
+
+        mode_1 = build_obstacle_preset("mode_1", DEFAULT_CONFIG)
+        mode_2 = build_obstacle_preset("mode_2", DEFAULT_CONFIG)
+        mode_3 = build_obstacle_preset("mode_3", DEFAULT_CONFIG)
+
+        self.assertEqual(cells_for("mode_1"), [(4, 5)])
+        self.assertEqual(cells_for("mode_2"), [(3, 5), (5, 5)])
+        self.assertEqual(cells_for("mode_3"), [(2, 5), (4, 6), (6, 5)])
+        self.assertTrue(all(obstacle.radius == 0.045 for obstacle in mode_1 + mode_2 + mode_3))
+        self.assertTrue(all(obstacle.height == 0.30 for obstacle in mode_1 + mode_2 + mode_3))
+
     def test_member_a_day_one_command_validation_edges(self):
         from src.interaction.cli import parse_command
 

@@ -833,27 +833,33 @@ def _set_camera(config: Config, client_id: int) -> None:
 
 
 def build_obstacle_preset(obstacle_mode: str, config: Config = DEFAULT_CONFIG) -> list[Obstacle]:
-    """Return 2-3 preset vertical cylinder obstacles for avoidance demos."""
+    """Return preset vertical cylinder obstacles for avoidance demos."""
     presets = {
-        "mode_1": [(2, 1, 5), (4, 1, 5)],
-        "mode_2": [(3, 2, 5), (4, 4, 5), (6, 3, 5)],
-        "mode_3": [(1, 3, 5), (5, 5, 5), (7, 2, 5)],
+        "mode_1": [(4, 5)],
+        "mode_2": [(2, 5), (5, 5)],
+        "mode_3": [(2, 5), (4, 6), (6, 5)],
         "none": [],
+    }
+    radii = {
+        "mode_1": 0.05,
+        "mode_2": 0.025,
+        "mode_3": 0.045,
     }
     cells = presets.get(obstacle_mode)
     if cells is None:
         raise ValueError(f"unknown obstacle_mode: {obstacle_mode}")
+    radius = radii[obstacle_mode]
     return [
         Obstacle(
             obstacle_id=f"preset_column_{index + 1}",
             center_xyz=(
                 config.board_origin[0] + col * config.cell_size,
                 config.board_origin[1] + row * config.cell_size,
-                config.z_board + z * config.cell_size
+                config.z_board,
             ),
-            radius=config.inflated_piece_radius,
-            height=0.32,
+            radius=radius,
+            height=0.30,
             dynamic=False,
         )
-        for index, (col, row, z) in enumerate(cells)
+        for index, (col, row) in enumerate(cells)
     ]
