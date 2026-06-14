@@ -18,3 +18,4 @@ results/simulation_preview*.png
 CLAUDE.md
 .spec-workflow/**
 docs/superpowers/plans/2026-06-14-path-planning-upgrade.md
+docs/superpowers/plans/2026-06-14-pybullet-integration-handover.md

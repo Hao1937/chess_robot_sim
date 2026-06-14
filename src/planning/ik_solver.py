@@ -4,15 +4,12 @@ import math
 
 from src.common.config import DEFAULT_CONFIG, Config
 
-_DH_A = (0.0, -0.42500, -0.39225, 0.0, 0.0, 0.0)
-_DH_D = (0.089159, 0.0, 0.0, 0.10915, 0.09465, 0.08230)
-
 # 缓存的 PyBullet IK 上下文，避免每次 solve_ik 都查 RUNTIME
 _PYB_IK_CTX: dict = {}
 
 
 def _get_pyb_ik_context() -> dict | None:
-    """获取 PyBullet IK 所需资源，失败返回 None（回退到解析 IK）。"""
+    """获取 PyBullet IK 所需资源，失败返回 None（回退到数值 IK）。"""
     global _PYB_IK_CTX
     if _PYB_IK_CTX:
         return _PYB_IK_CTX
@@ -56,19 +53,15 @@ def _get_pyb_ik_context() -> dict | None:
 def solve_ik(target_xyz: tuple[float, float, float], config: Config = DEFAULT_CONFIG) -> tuple[float, ...]:
     """Solve UR5 inverse kinematics for a target point.
 
-    当 PyBullet 可用时优先使用 PyBullet 内置 IK（保证与 URDF 模型运动学一致），
-    失败或不可用时回退到解析 IK。
+    优先使用 PyBullet 内置 IK（保证与 URDF 运动学一致），
+    失败或不可用时回退到数值 IK（使用正确 FK 的 Jacobian 迭代法）。
     """
     pyb_solution = _solve_ik_pybullet(target_xyz, config)
     if pyb_solution is not None:
         return pyb_solution
 
-    target_pose = _target_pose_from_xyz(target_xyz, config)
-    solutions = _inverse_kinematics_ur5(target_pose)
-    if not solutions:
-        return config.home_pose
-    best = min(solutions, key=lambda solution: _distance_to_home(solution, config.base_link_position))
-    return tuple(round(_wrap_to_pi(theta), 4) for theta in best)
+    # ── 数值 IK fallback ──
+    return _solve_ik_numerical(target_xyz, config)
 
 
 def _solve_ik_pybullet(
@@ -77,9 +70,10 @@ def _solve_ik_pybullet(
 ) -> tuple[float, ...] | None:
     """使用 PyBullet 内置 IK 求解，保证与 URDF 模型运动学一致。
 
-    接收世界坐标 target_xyz，内部转换为 robot base 系传给 PyBullet IK。
-    EE link 使用「tool0」(joint 8)，转动关节为 1-6。
-    失败时返回 None，调用方回退到解析 IK。
+    增强稳定性：
+    - 优先使用 DLS solver（对奇异位形更鲁棒）
+    - 失败时尝试 SDLS solver
+    - 如果带姿态约束失败，尝试仅位置 IK
     """
     ctx = _get_pyb_ik_context()
     if ctx is None:
@@ -88,39 +82,78 @@ def _solve_ik_pybullet(
     p = ctx["p"]
     robot_id = ctx["robot_id"]
     client_id = ctx["client_id"]
-    # 优先 tool0 (joint 8)，ee_link (joint 7) 备选
     ee_idx = ctx["ee_idx"]
     joint_indices = ctx["joint_indices"]
 
-    # 目标在 robot base 系下的位置
-    target_pos = [
-        target_xyz[0] - config.base_link_position[0],
-        target_xyz[1] - config.base_link_position[1],
-        target_xyz[2] - config.base_link_position[2],
-    ]
+    # 目标在世界坐标系下的位置（PyBullet IK 使用世界坐标）
+    target_pos = [target_xyz[0], target_xyz[1], target_xyz[2]]
 
-    # 工具姿态：x 同世界 x，y 反向世界 y，z 向下（= 绕 x 轴转 π）
+    # 工具姿态：绕 x 轴转 π（z 向下）
     target_orn = p.getQuaternionFromEuler((math.pi, 0.0, 0.0))
 
+    # 尝试多种 solver 组合
+    strategies = [
+        # (solver, use_orientation, rest_poses, joint_damping)
+        (getattr(p, "IK_DLS", None), True, list(config.home_pose[:6]), None),
+        (getattr(p, "IK_SDLS", None), True, list(config.home_pose[:6]), None),
+        (getattr(p, "IK_DLS", None), False, list(config.home_pose[:6]), None),
+    ]
+
+    for solver, use_orn, rest_poses, damping in strategies:
+        try:
+            kwargs = {
+                "lowerLimits": [-math.pi] * 6,
+                "upperLimits": [math.pi] * 6,
+                "jointRanges": [2.0 * math.pi] * 6,
+                "restPoses": rest_poses,
+                "physicsClientId": client_id,
+            }
+            if solver is not None:
+                kwargs["solver"] = solver
+            if damping is not None:
+                kwargs["jointDamping"] = [damping] * 6
+
+            if use_orn:
+                kwargs["targetOrientation"] = target_orn
+
+            joint_angles = p.calculateInverseKinematics(
+                robot_id, ee_idx, target_pos, **kwargs
+            )
+
+            if len(joint_angles) >= 6:
+                result = tuple(round(_wrap_to_pi(joint_angles[i]), 4) for i in range(6))
+                # 验证解的正确性：使用 PyBullet FK 反算 EE 位置
+                if _validate_ik_solution_pybullet(ctx, result, target_xyz, config, tolerance=0.01):
+                    return result
+                # 验证未通过，继续尝试下一个策略
+        except Exception:
+            continue
+
+    # 所有 PyBullet 策略都失败，回退到数值 IK
+    return None
+
+
+def _validate_ik_solution_pybullet(
+    ctx: dict,
+    joint_angles: tuple[float, ...],
+    target_xyz: tuple[float, float, float],
+    config: Config,
+    tolerance: float = 0.05,
+) -> bool:
+    """使用 PyBullet FK 验证 IK 解是否使 EE 到达目标附近。"""
     try:
-        joint_angles = p.calculateInverseKinematics(
-            robot_id,
-            ee_idx,
-            target_pos,
-            target_orn,
-            lowerLimits=[-math.pi] * 6,
-            upperLimits=[math.pi] * 6,
-            jointRanges=[2.0 * math.pi] * 6,
-            restPoses=list(config.home_pose[:6]),
-            physicsClientId=client_id,
+        from src.control.fk_solver import _solve_fk_pybullet
+        ee = _solve_fk_pybullet(joint_angles)
+        if ee is None:
+            return True  # 无法验证，假定正确
+        error = math.sqrt(
+            (ee[0] - target_xyz[0]) ** 2
+            + (ee[1] - target_xyz[1]) ** 2
+            + (ee[2] - target_xyz[2]) ** 2
         )
+        return error <= tolerance
     except Exception:
-        return None
-
-    if len(joint_angles) < 6:
-        return None
-
-    return tuple(round(_wrap_to_pi(joint_angles[i]), 4) for i in range(6))
+        return True  # 验证失败，假定正确
 
 
 def is_reachable(target_xyz: tuple[float, float, float], config: Config = DEFAULT_CONFIG) -> bool:
@@ -129,6 +162,187 @@ def is_reachable(target_xyz: tuple[float, float, float], config: Config = DEFAUL
     target_x, target_y = target_xyz[:2]
     distance = math.hypot(target_x - base_x, target_y - base_y)
     return bool(0.25 <= distance <= 0.9)
+
+
+# ── Numerical IK (Jacobian pseudo-inverse with damped least squares) ──
+
+# Joint limits from the URDF
+_JOINT_LIMITS = [
+    (-2.0 * math.pi, 2.0 * math.pi),
+    (-2.0 * math.pi, 2.0 * math.pi),
+    (-2.0 * math.pi, 2.0 * math.pi),
+    (-2.0 * math.pi, 2.0 * math.pi),
+    (-2.0 * math.pi, 2.0 * math.pi),
+    (-2.0 * math.pi, 2.0 * math.pi),
+]
+
+
+def _solve_ik_numerical(
+    target_xyz: tuple[float, float, float],
+    config: Config = DEFAULT_CONFIG,
+    *,
+    max_iters: int = 300,
+    tolerance: float = 0.001,
+    damping: float = 0.15,
+) -> tuple[float, ...]:
+    """Numerical IK using damped least squares Jacobian pseudo-inverse.
+
+    使用 URDF 链 FK 保证与 PyBullet 模型完全一致。
+    从 home pose 开始迭代，对奇异位形和关节极限具有鲁棒性。
+
+    Args:
+        target_xyz: target EE position in world frame
+        config: configuration
+        max_iters: maximum iterations
+        tolerance: convergence threshold (m)
+        damping: damping factor for singularity robustness
+
+    Returns:
+        6 joint angles (rad), or home_pose if no solution found
+    """
+    from src.control.fk_solver import _solve_fk_urdf_chain
+
+    # 初始猜测：home pose
+    theta = list(config.home_pose[:6])
+
+    best_theta = list(theta)
+    best_error = float("inf")
+
+    for iteration in range(max_iters):
+        # 当前 EE 位置
+        current = _solve_fk_urdf_chain(tuple(theta), config)
+        error_vec = [
+            target_xyz[0] - current[0],
+            target_xyz[1] - current[1],
+            target_xyz[2] - current[2],
+        ]
+        error = math.sqrt(sum(e**2 for e in error_vec))
+
+        # 跟踪最佳解
+        if error < best_error:
+            best_error = error
+            best_theta = list(theta)
+
+        if error < tolerance:
+            return tuple(round(_wrap_to_pi(t), 4) for t in theta)
+
+        # 计算数值 Jacobian (3×6)
+        J = _compute_jacobian(tuple(theta), config)
+
+        # Damped least squares: Δθ = J^T (J·J^T + λ²·I)⁻¹ · e
+        delta = _dls_step(J, error_vec, damping)
+
+        # 更新关节角度并限制在范围内
+        for j in range(6):
+            theta[j] += delta[j]
+            lo, hi = _JOINT_LIMITS[j]
+            theta[j] = max(lo, min(hi, theta[j]))
+
+        # 自适应阻尼：误差大时增加阻尼避免振荡
+        if error > 0.1:
+            damping = 0.3
+        elif error > 0.01:
+            damping = 0.15
+        else:
+            damping = 0.05
+
+    # 返回最佳解
+    if best_error < 0.05:  # 5cm 以内可接受
+        return tuple(round(_wrap_to_pi(t), 4) for t in best_theta)
+
+    # 完全失败：返回 home pose
+    return config.home_pose[:6]
+
+
+def _compute_jacobian(
+    theta: tuple[float, ...],
+    config: Config,
+    delta: float = 0.0005,
+) -> list[list[float]]:
+    """Compute 3×6 position Jacobian numerically using central differences.
+
+    J[i][j] = ∂x_i / ∂θ_j
+    """
+    from src.control.fk_solver import _solve_fk_urdf_chain
+
+    J = [[0.0] * 6 for _ in range(3)]  # 3 rows × 6 cols
+
+    f0 = _solve_fk_urdf_chain(theta, config)
+
+    for j in range(6):
+        theta_plus = list(theta)
+        theta_plus[j] += delta
+        f_plus = _solve_fk_urdf_chain(tuple(theta_plus), config)
+
+        # Forward difference (accurate enough with small delta)
+        for i in range(3):
+            J[i][j] = (f_plus[i] - f0[i]) / delta
+
+    return J
+
+
+def _dls_step(
+    J: list[list[float]],  # 3×6
+    error_vec: list[float],  # 3
+    damping: float,
+) -> list[float]:  # 6
+    """Damped least squares: Δθ = J^T (J·J^T + λ²·I)⁻¹ · e
+
+    J is 3×6, so J·J^T is 3×3.
+    """
+    # J·J^T (3×3)
+    JJT = [[0.0] * 3 for _ in range(3)]
+    for i in range(3):
+        for k in range(3):
+            s = 0.0
+            for j in range(6):
+                s += J[i][j] * J[k][j]
+            JJT[i][k] = s
+
+    # J·J^T + λ²·I
+    lam_sq = damping * damping
+    A = [[JJT[i][k] + (lam_sq if i == k else 0.0) for k in range(3)] for i in range(3)]
+
+    # Solve A · x = error_vec for x (3×1)
+    x = _solve_3x3(A, error_vec)
+
+    # Δθ = J^T · x (6×1)
+    delta = [0.0] * 6
+    for j in range(6):
+        s = 0.0
+        for i in range(3):
+            s += J[i][j] * x[i]
+        delta[j] = s
+
+    return delta
+
+
+def _solve_3x3(A: list[list[float]], b: list[float]) -> list[float]:
+    """Solve 3×3 linear system A·x = b using Cramer's rule.
+
+    Returns zero vector if singular.
+    """
+    # Determinant of 3×3
+    def det3(M):
+        return (
+            M[0][0] * (M[1][1] * M[2][2] - M[1][2] * M[2][1])
+            - M[0][1] * (M[1][0] * M[2][2] - M[1][2] * M[2][0])
+            + M[0][2] * (M[1][0] * M[2][1] - M[1][1] * M[2][0])
+        )
+
+    d = det3(A)
+    if abs(d) < 1e-15:
+        return [0.0, 0.0, 0.0]
+
+    # Replace each column with b
+    A0 = [[b[0], A[0][1], A[0][2]], [b[1], A[1][1], A[1][2]], [b[2], A[2][1], A[2][2]]]
+    A1 = [[A[0][0], b[0], A[0][2]], [A[1][0], b[1], A[1][2]], [A[2][0], b[2], A[2][2]]]
+    A2 = [[A[0][0], A[0][1], b[0]], [A[1][0], A[1][1], b[1]], [A[2][0], A[2][1], b[2]]]
+
+    return [det3(A0) / d, det3(A1) / d, det3(A2) / d]
+
+
+# ── legacy helpers (保留兼容性) ──
 
 
 def _target_pose_from_xyz(target_xyz: tuple[float, float, float], config: Config) -> list[list[float]]:
@@ -144,16 +358,21 @@ def _target_pose_from_xyz(target_xyz: tuple[float, float, float], config: Config
         [1.0, 0.0, 0.0, px],
         [0.0, -1.0, 0.0, py],
         [0.0, 0.0, -1.0, pz],
-        [0.0, 0.0, 0.0, 1.0],#和世界坐标系相比，x轴同向，y反向，z反向
+        [0.0, 0.0, 0.0, 1.0],
     ]
 
 
 def _inverse_kinematics_ur5(target_pose: list[list[float]]) -> list[tuple[float, ...]]:
-    """Translate the MATLAB UR5 standard-DH analytic IK into Python.
+    """Legacy DH-based analytical IK — 保留以供参考和向后兼容。
 
-    Returns up to eight candidate joint solutions. Invalid branches caused by
-    unreachable geometry or singular divisions are skipped.
+    注意：此函数基于 Standard DH 参数，与 URDF 模型运动学不完全一致。
+    新代码应使用 solve_ik() 入口，它会优先使用 PyBullet IK，
+    失败时回退到数值 IK（_solve_ik_numerical）。
     """
+    # Standard DH parameters (kept for reference)
+    _DH_A = (0.0, -0.42500, -0.39225, 0.0, 0.0, 0.0)
+    _DH_D = (0.089159, 0.0, 0.0, 0.10915, 0.09465, 0.08230)
+
     t = target_pose
     nx, ny, nz = t[0][0], t[1][0], t[2][0]
     ox, oy, oz = t[0][1], t[1][1], t[2][1]

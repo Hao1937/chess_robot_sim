@@ -4,11 +4,6 @@ import math
 
 from src.common.config import DEFAULT_CONFIG, Config
 
-# UR5 standard DH parameters (same as ik_solver.py)
-_DH_A = (0.0, -0.42500, -0.39225, 0.0, 0.0, 0.0)
-_DH_D = (0.089159, 0.0, 0.0, 0.10915, 0.09465, 0.08230)
-_DH_ALPHA = (math.pi / 2, 0.0, 0.0, math.pi / 2, -math.pi / 2, 0.0)
-
 
 def solve_fk(
     joint_angles: tuple[float, ...],
@@ -17,32 +12,21 @@ def solve_fk(
     """UR5 forward kinematics: joint angles → end-effector world position.
 
     优先使用 PyBullet FK（保证与 URDF 模型一致），
-    PyBullet 不可用时回退到解析 DH FK。
+    PyBullet 不可用时回退到 URDF 链 FK。
 
     Args:
         joint_angles: 6 joint angles (rad)
         config: configuration for base_link_position
 
     Returns:
-        (x, y, z) world-frame position of the end-effector
+        (x, y, z) world-frame position of the end-effector (tool0)
     """
     pyb_result = _solve_fk_pybullet(joint_angles)
     if pyb_result is not None:
         return pyb_result
 
-    # ── 解析 DH FK (fallback) ──
-    bx, by, bz = config.base_link_position
-    T = _translation_matrix(bx, by, bz)
-
-    for i in range(6):
-        theta = joint_angles[i]
-        d = _DH_D[i]
-        a = _DH_A[i]
-        alpha = _DH_ALPHA[i]
-        T_i = _dh_transform(theta, d, a, alpha)
-        T = _multiply_4x4(T, T_i)
-
-    return (T[0][3], T[1][3], T[2][3])
+    # ── URDF chain FK (fallback) ──
+    return _solve_fk_urdf_chain(joint_angles, config)
 
 
 # 缓存的 PyBullet FK 上下文
@@ -146,24 +130,56 @@ def compute_ee_error(
     )
 
 
+# ── URDF chain FK (matches ur5_joint_limited_robot.urdf exactly) ──
+
+
+def _solve_fk_urdf_chain(
+    joint_angles: tuple[float, ...],
+    config: Config = DEFAULT_CONFIG,
+) -> tuple[float, float, float]:
+    """Compute tool0 position by walking the URDF kinematic chain directly.
+
+    The chain follows `ur5_joint_limited_robot.urdf`:
+      base_link → shoulder_pan(z) → shoulder_lift(y) → elbow(y)
+      → wrist_1(y) → wrist_2(z) → wrist_3(y) → tool0(fixed)
+    """
+    θ0, θ1, θ2, θ3, θ4, θ5 = joint_angles
+
+    bx, by, bz = config.base_link_position
+    T = _translation_matrix(bx, by, bz)
+
+    # Joint 0: shoulder_pan (z-axis)
+    #   origin: xyz=(0, 0, 0.089159), rpy=(0, 0, 0)
+    T = _multiply_4x4(T, _joint_z(θ0, 0.0, 0.0, 0.089159))
+
+    # Joint 1: shoulder_lift (y-axis)
+    #   origin: xyz=(0, 0.13585, 0), rpy=(0, π/2, 0)
+    T = _multiply_4x4(T, _joint_y(θ1, 0.0, 0.13585, 0.0, math.pi / 2))
+
+    # Joint 2: elbow (y-axis)
+    #   origin: xyz=(0, -0.1197, 0.425), rpy=(0, 0, 0)
+    T = _multiply_4x4(T, _joint_y(θ2, 0.0, -0.1197, 0.425, 0.0))
+
+    # Joint 3: wrist_1 (y-axis)
+    #   origin: xyz=(0, 0, 0.39225), rpy=(0, π/2, 0)
+    T = _multiply_4x4(T, _joint_y(θ3, 0.0, 0.0, 0.39225, math.pi / 2))
+
+    # Joint 4: wrist_2 (z-axis)
+    #   origin: xyz=(0, 0.093, 0), rpy=(0, 0, 0)
+    T = _multiply_4x4(T, _joint_z(θ4, 0.0, 0.093, 0.0))
+
+    # Joint 5: wrist_3 (y-axis)
+    #   origin: xyz=(0, 0, 0.09465), rpy=(0, 0, 0)
+    T = _multiply_4x4(T, _joint_y(θ5, 0.0, 0.0, 0.09465, 0.0))
+
+    # Fixed joint: wrist_3 → tool0
+    #   origin: xyz=(0, 0.0823, 0), rpy=(-π/2, 0, 0)
+    T = _multiply_4x4(T, _fixed_joint(0.0, 0.0823, 0.0, -math.pi / 2, 0.0, 0.0))
+
+    return (T[0][3], T[1][3], T[2][3])
+
+
 # ── internal helpers ──
-
-
-def _dh_transform(
-    theta: float, d: float, a: float, alpha: float
-) -> list[list[float]]:
-    """Standard DH transformation matrix: Rz(θ)·Tz(d)·Tx(a)·Rx(α)."""
-    ct = math.cos(theta)
-    st = math.sin(theta)
-    ca = math.cos(alpha)
-    sa = math.sin(alpha)
-
-    return [
-        [ct, -st * ca,  st * sa, a * ct],
-        [st,  ct * ca, -ct * sa, a * st],
-        [0.0,      sa,      ca,      d],
-        [0.0,     0.0,     0.0,    1.0],
-    ]
 
 
 def _translation_matrix(x: float, y: float, z: float) -> list[list[float]]:
@@ -173,6 +189,79 @@ def _translation_matrix(x: float, y: float, z: float) -> list[list[float]]:
         [0.0, 0.0, 1.0, z],
         [0.0, 0.0, 0.0, 1.0],
     ]
+
+
+def _rotation_x(a: float) -> list[list[float]]:
+    """Rotation about x-axis by a radians."""
+    ca = math.cos(a)
+    sa = math.sin(a)
+    return [
+        [1.0, 0.0, 0.0, 0.0],
+        [0.0,  ca, -sa, 0.0],
+        [0.0,  sa,  ca, 0.0],
+        [0.0, 0.0, 0.0, 1.0],
+    ]
+
+
+def _rotation_y(a: float) -> list[list[float]]:
+    """Rotation about y-axis by a radians."""
+    ca = math.cos(a)
+    sa = math.sin(a)
+    return [
+        [ ca, 0.0,  sa, 0.0],
+        [0.0, 1.0, 0.0, 0.0],
+        [-sa, 0.0,  ca, 0.0],
+        [0.0, 0.0, 0.0, 1.0],
+    ]
+
+
+def _rotation_z(a: float) -> list[list[float]]:
+    """Rotation about z-axis by a radians."""
+    ca = math.cos(a)
+    sa = math.sin(a)
+    return [
+        [ ca, -sa, 0.0, 0.0],
+        [ sa,  ca, 0.0, 0.0],
+        [0.0, 0.0, 1.0, 0.0],
+        [0.0, 0.0, 0.0, 1.0],
+    ]
+
+
+def _rpy_matrix(rx: float, ry: float, rz: float) -> list[list[float]]:
+    """Fixed-axis RPY rotation: Rz(rz)·Ry(ry)·Rx(rx)."""
+    R = _rotation_z(rz)
+    R = _multiply_4x4(R, _rotation_y(ry))
+    R = _multiply_4x4(R, _rotation_x(rx))
+    return R
+
+
+def _joint_z(
+    theta: float, dx: float, dy: float, dz: float
+) -> list[list[float]]:
+    """Transform for a z-axis revolute joint: T(dx,dy,dz)·Rz(theta)."""
+    T = _translation_matrix(dx, dy, dz)
+    return _multiply_4x4(T, _rotation_z(theta))
+
+
+def _joint_y(
+    theta: float, dx: float, dy: float, dz: float, rpy_y: float
+) -> list[list[float]]:
+    """Transform for a y-axis revolute joint with optional RPY offset.
+
+    URDF convention: T(dx,dy,dz)·Ry(rpy_y)·Ry(theta)
+    The rpy_y is the fixed RPY component (e.g. π/2 for shoulder_lift origin).
+    """
+    T = _translation_matrix(dx, dy, dz)
+    T = _multiply_4x4(T, _rotation_y(rpy_y))
+    return _multiply_4x4(T, _rotation_y(theta))
+
+
+def _fixed_joint(
+    dx: float, dy: float, dz: float, rx: float, ry: float, rz: float
+) -> list[list[float]]:
+    """Transform for a fixed joint: T(dx,dy,dz)·Rz(rz)·Ry(ry)·Rx(rx)."""
+    T = _translation_matrix(dx, dy, dz)
+    return _multiply_4x4(T, _rpy_matrix(rx, ry, rz))
 
 
 def _multiply_4x4(

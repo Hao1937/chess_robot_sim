@@ -158,33 +158,35 @@ def _init_joint_state(ctx: _PyBulletContext, waypoint: tuple[float, ...]) -> Non
     """将机械臂关节瞬间重置到轨迹起点，并同步电机目标。
 
     先设电机目标位置再重置关节状态，避免重力导致大幅回弹。
+    使用较高的 PD 增益确保机械臂在重力下保持姿态。
     """
     clamped = tuple(
         _clamp_joint(waypoint[j], j) for j in range(len(waypoint))
     )
+    # 初始化电机参数（高增益以对抗重力）
     for idx, joint_idx in enumerate(ctx.joint_indices):
-        # 先设电机目标到位
         p.setJointMotorControl2(
             bodyUniqueId=ctx.robot_id,
             jointIndex=joint_idx,
             controlMode=p.POSITION_CONTROL,
             targetPosition=clamped[idx],
             targetVelocity=0.0,
-            force=500,
+            force=1000,
             maxVelocity=10.0,
-            positionGain=0.6,
+            positionGain=1.2,
             velocityGain=0.8,
             physicsClientId=ctx.client_id,
         )
-        # 再重置关节物理状态
+    # 重置关节物理状态到目标位置（在设置电机参数之后）
+    for idx, joint_idx in enumerate(ctx.joint_indices):
         p.resetJointState(
             ctx.robot_id,
             joint_idx,
             targetValue=clamped[idx],
             physicsClientId=ctx.client_id,
         )
-    # 让物理稳定到目标姿态
-    for _ in range(240):
+    # 充分步进让物理稳定（480 步 ≈ 2 秒 @240Hz）
+    for _ in range(480):
         p.stepSimulation(ctx.client_id)
 
 
@@ -219,9 +221,10 @@ def _execute_pybullet_step(
         _clamp_joint(waypoint[j], j) for j in range(len(waypoint))
     )
 
-    max_force = 500 if mode == "fast" else 200
+    # 更高的增益和力矩以保证机械臂在重力下稳定跟踪轨迹
+    max_force = 1000 if mode == "fast" else 600
     max_velocity = 10.0 if mode == "fast" else 5.0
-    position_gain = 0.6
+    position_gain = 1.2
     velocity_gain = 0.8
 
     # Apply position control to all joints
