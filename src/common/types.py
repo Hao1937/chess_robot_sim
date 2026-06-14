@@ -63,6 +63,7 @@ class MotionPrimitive:
     cell: str
     target_xyz: tuple[float, float, float]
     speed_mode: str = "safe"
+    piece_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -78,6 +79,13 @@ class Obstacle:
 class SafetyDecision:
     status: str
     reason: str = ""
+
+
+@dataclass(frozen=True)
+class PrimitivePlanningContext:
+    primitive: MotionPrimitive
+    obstacles: list[Obstacle]
+    safety_decision: SafetyDecision
 
 
 @dataclass(frozen=True)

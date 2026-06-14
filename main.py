@@ -13,7 +13,7 @@ from src.interaction.chess_rules import validate_move
 from src.interaction.cli import parse_command
 from src.interaction.gui import poll_gui_command
 from src.planning.motion_primitives import build_motion_primitives
-from src.planning.obstacle_map import assess_obstacle_intervention, build_obstacle_map
+from src.planning.obstacle_map import build_primitive_obstacle_contexts
 from src.planning.trajectory_planner import plan_trajectory
 from src.simulation.attachment import attach_piece, detach_piece
 from src.simulation.load_robot import load_robot
@@ -40,17 +40,21 @@ def run_command(
 
     actions = make_logical_actions(board, command)
     primitives = build_motion_primitives(actions, config)
-    obstacles = build_obstacle_map(
-        piece_cells=list(board.pieces),
+    planning_contexts = build_primitive_obstacle_contexts(
+        actions=actions,
+        primitives=primitives,
+        board=board,
         extra_obstacles=scene.obstacles,
         human_hand_present=human_hand_present,
         config=config,
     )
-    safety_decisions = [
-        assess_obstacle_intervention(primitive.target_xyz, obstacles, config)
-        for primitive in primitives
-    ]
-    trajectory = plan_trajectory(primitives, obstacles, config)
+    safety_decisions = [context.safety_decision for context in planning_contexts]
+    obstacle_ids = sorted({
+        obstacle.obstacle_id
+        for context in planning_contexts
+        for obstacle in context.obstacles
+    })
+    trajectory = plan_trajectory(planning_contexts, config=config)
 
     should_attach_piece = command.command_type == "move" and command.from_cell in board.pieces
     if should_attach_piece:
@@ -67,7 +71,8 @@ def run_command(
         "command": command,
         "actions": actions,
         "human_hand_present": human_hand_present,
-        "obstacle_ids": [obstacle.obstacle_id for obstacle in obstacles],
+        "obstacle_ids": obstacle_ids,
+        "planning_contexts": planning_contexts,
         "safety_decisions": safety_decisions,
         "primitive_count": len(primitives),
         "trajectory_points": len(trajectory.joint_waypoints),

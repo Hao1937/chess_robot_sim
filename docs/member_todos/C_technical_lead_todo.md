@@ -84,7 +84,7 @@ reset 不另起特殊系统，直接复用 pick/place 序列。
 
 文件：`main.py`
 
-主流程必须是：B `load_robot()` 和 `build_scene()`；A `parse_command()`、`validate_move()`、`make_logical_actions()`；C `build_motion_primitives()`、`build_obstacle_map()`、`plan_trajectory()`；B `attach_piece()` / `detach_piece()`；D `execute_trajectory()` 和 `summarize_execution()`。
+主流程必须是：B `load_robot()` 和 `build_scene()`；A `parse_command()`、`validate_move()`、`make_logical_actions()`；C `build_motion_primitives()`、`build_primitive_obstacle_contexts()`、`plan_trajectory()`；B `attach_piece()` / `detach_piece()`；D `execute_trajectory()` 和 `summarize_execution()`。
 
 不要把 A/B/D 的细节写进 `main.py`。
 
@@ -102,10 +102,26 @@ def build_obstacle_map(
     extra_obstacles: list[Obstacle],
     human_hand_present: bool = False,
     config: Config = DEFAULT_CONFIG,
+    excluded_cells: set[str] | None = None,
 ) -> list[Obstacle]:
 ```
 
-要求：棋子转成 inflated obstacle；obstacle mode 的预设圆柱加入 obstacle list；hand_on 时加入 human hand dynamic obstacle；正在抓取的棋子后续可以从 obstacle list 中排除。
+要求：棋子转成 inflated obstacle；obstacle mode 的预设圆柱加入 obstacle list；hand_on 时加入 human hand dynamic obstacle；`excluded_cells` 中的棋盘格不生成棋子障碍。
+
+最终版规划不要只用一张静态 obstacle map。必须提供逐 primitive 的上下文：
+
+```python
+def build_primitive_obstacle_contexts(
+    actions: list[LogicalAction],
+    primitives: list[MotionPrimitive],
+    board: BoardState,
+    extra_obstacles: list[Obstacle],
+    human_hand_present: bool = False,
+    config: Config = DEFAULT_CONFIG,
+) -> list[PrimitivePlanningContext]:
+```
+
+要求：根据 pick/place 序列模拟棋盘占用。棋子被 `lift` 后从 obstacle list 中移除；棋子 `retreat` 阶段重新落到目标格后再作为障碍；`CAPTURED_*` 不作为棋盘障碍。每个 `PrimitivePlanningContext` 包含当前 primitive、该 primitive 的 obstacles，以及对应 `SafetyDecision`。
 
 同时提供动态障碍介入判断：
 
@@ -131,13 +147,13 @@ def assess_obstacle_intervention(
 
 ```python
 def plan_trajectory(
-    primitives: list[MotionPrimitive],
-    obstacles: list[Obstacle],
+    primitives_or_contexts: list[MotionPrimitive] | list[PrimitivePlanningContext],
+    obstacles: list[Obstacle] | None = None,
     config: Config = DEFAULT_CONFIG,
 ) -> JointTrajectory:
 ```
 
-要求：每个 primitive 通过 IK 转为关节 waypoint；接近障碍物时 speed profile 输出 `safe`；无障碍高空转移可以输出 `fast`；低空 descend / retreat 必须 `safe`；后续可以加入绕行 waypoint。
+要求：优先消费 `list[PrimitivePlanningContext]`，每个 primitive 使用自己的 obstacle list 和 safety decision；每个 primitive 通过 IK 转为关节 waypoint；接近障碍物时 speed profile 输出 `safe`；无障碍高空转移可以输出 `fast`；低空 descend / retreat 必须 `safe`；后续可以加入绕行 waypoint。
 
 ## 6/18 周四：P2 reset、规则、GUI、人手区集成
 

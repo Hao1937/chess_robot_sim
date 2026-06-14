@@ -1,13 +1,13 @@
 TODO.md
 ABCD分工选择说明.pdf
 .obsidian/**
-__pycache__/**
+# Python cache
+__pycache__/
+**/__pycache__/
 *.py[cod]
 *$py.class
 全组TODO时间表.md
 .venv/**
-src/planning/__pycache__/**
-src/common/__pycache__/**
 results/simulation_preview.png
 .vscode/
 results/*.log
@@ -15,3 +15,5 @@ results/simulation_preview*.png
 !results/.gitkeep
 全组TODO时间表.md
 交接文档.md
+CLAUDE.md
+.spec-workflow/**

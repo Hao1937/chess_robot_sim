@@ -76,6 +76,37 @@ class ContractInterfaceTests(unittest.TestCase):
         self.assertEqual(len(trajectory.joint_waypoints), len(trajectory.speed_profile))
         self.assertIn("safe", trajectory.speed_profile)
 
+    def test_primitive_obstacle_contexts_track_carried_piece_lifecycle(self):
+        from src.interaction.board_state import create_initial_board, make_logical_actions
+        from src.interaction.cli import parse_command
+        from src.planning.motion_primitives import build_motion_primitives
+        from src.planning.obstacle_map import build_primitive_obstacle_contexts
+        from src.planning.trajectory_planner import plan_trajectory
+
+        board = create_initial_board()
+        actions = make_logical_actions(board, parse_command("A1 A2"))
+        primitives = build_motion_primitives(actions)
+
+        contexts = build_primitive_obstacle_contexts(
+            actions=actions,
+            primitives=primitives,
+            board=board,
+            extra_obstacles=[],
+        )
+        ids_by_type = {
+            context.primitive.primitive_type: {obstacle.obstacle_id for obstacle in context.obstacles}
+            for context in contexts
+        }
+        trajectory = plan_trajectory(contexts)
+
+        self.assertEqual(len(contexts), len(primitives))
+        self.assertIn("piece_A1", ids_by_type["approach"])
+        self.assertNotIn("piece_A1", ids_by_type["lift"])
+        self.assertNotIn("piece_A1", ids_by_type["transfer"])
+        self.assertNotIn("piece_A2", ids_by_type["detach"])
+        self.assertIn("piece_A2", ids_by_type["retreat"])
+        self.assertEqual(len(trajectory.joint_waypoints), len(contexts))
+
     def test_solve_ik_uses_analytic_backend_without_pybullet(self):
         import math
 
