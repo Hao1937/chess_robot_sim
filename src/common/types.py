@@ -19,6 +19,13 @@ class PieceType(str, Enum):
     SOLDIER = "soldier"
 
 
+class ObstacleShape(str, Enum):
+    """障碍物形状类型，用于碰撞检测和占栅格生成的分派。"""
+    VERTICAL_CYLINDER = "vertical_cylinder"    # 竖直圆柱（棋子、预设柱）
+    HORIZONTAL_CYLINDER = "horizontal_cylinder" # 水平横躺圆柱（人手安全区）
+    AABB = "aabb"                               # 轴对齐包围盒（预留扩展）
+
+
 @dataclass(frozen=True)
 class Piece:
     piece_id: str
@@ -73,6 +80,33 @@ class Obstacle:
     radius: float
     height: float
     dynamic: bool = False
+    shape: ObstacleShape = ObstacleShape.VERTICAL_CYLINDER
+    orientation_rpy: tuple[float, float, float] = (0.0, 0.0, 0.0)
+
+
+@dataclass(frozen=True)
+class PathSearchResult:
+    """A* / RRT 路径搜索结果"""
+    success: bool
+    path_xy: list[tuple[float, float]] = field(default_factory=list)
+    search_time_ms: float = 0.0
+    nodes_explored: int = 0
+
+
+@dataclass(frozen=True)
+class CollisionCheckResult:
+    """路径段碰撞检测结果"""
+    collision_free: bool
+    min_clearance: float = float("inf")
+    collision_point: tuple[float, float, float] | None = None
+
+
+@dataclass(frozen=True)
+class SmoothingResult:
+    """轨迹平滑结果"""
+    original_count: int
+    smoothed_count: int
+    max_jerk_reduction: float = 0.0
 
 
 @dataclass(frozen=True)

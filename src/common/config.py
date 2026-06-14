@@ -26,6 +26,16 @@ class Config:
     human_hand_zone_radius: float = 0.025
     human_hand_zone_length_cells: float = 4.0
 
+    # ── Path Planning 参数 ──
+    path_grid_resolution: float = 0.02        # A* 网格分辨率 (m)
+    path_collision_check_step: float = 0.005  # 碰撞检测步长 (m)
+    path_search_timeout_ms: float = 100.0     # 搜索超时 (ms)
+    path_smoothing_angle_threshold: float = 0.15  # shortcut 角度阈值 (rad)
+
+    # ── Waypoint Interpolation ──
+    waypoint_interpolation_step: float = 0.03  # 插值步长 (m) in Cartesian
+    waypoint_vertical_step: float = 0.01       # 垂直方向插值步长 (m)
+
     @property
     def inflated_piece_radius(self) -> float:
         return self.piece_radius + self.end_effector_radius + self.safety_margin

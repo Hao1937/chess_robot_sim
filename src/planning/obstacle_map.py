@@ -1,7 +1,12 @@
 from __future__ import annotations
 
+import math
+
 from src.common.config import DEFAULT_CONFIG, Config
-from src.common.types import BoardState, LogicalAction, MotionPrimitive, Obstacle, PrimitivePlanningContext, SafetyDecision
+from src.common.types import (
+    BoardState, LogicalAction, MotionPrimitive,
+    Obstacle, ObstacleShape, PrimitivePlanningContext, SafetyDecision,
+)
 from src.planning.chessboard_mapping import cell_to_world
 from src.planning.ik_solver import is_reachable
 
@@ -32,9 +37,11 @@ def build_obstacle_map(
             Obstacle(
                 obstacle_id="human_hand_zone",
                 center_xyz=config.human_hand_zone_center,
-                radius=config.human_hand_planning_radius,
-                height=config.human_hand_zone_radius * 2.0,
+                radius=config.human_hand_zone_radius,
+                height=config.human_hand_zone_length,
                 dynamic=True,
+                shape=ObstacleShape.HORIZONTAL_CYLINDER,
+                orientation_rpy=(0.0, math.pi / 2.0, 0.0),
             )
         )
     return obstacles

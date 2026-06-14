@@ -105,7 +105,9 @@ class ContractInterfaceTests(unittest.TestCase):
         self.assertNotIn("piece_A1", ids_by_type["transfer"])
         self.assertNotIn("piece_A2", ids_by_type["detach"])
         self.assertIn("piece_A2", ids_by_type["retreat"])
-        self.assertEqual(len(trajectory.joint_waypoints), len(contexts))
+        # 插值后 waypoint 数 ≥ primitive 数（默认开启插值）
+        self.assertGreaterEqual(len(trajectory.joint_waypoints), len(contexts))
+        self.assertEqual(len(trajectory.joint_waypoints), len(trajectory.speed_profile))
 
     def test_solve_ik_uses_analytic_backend_without_pybullet(self):
         import math
@@ -274,8 +276,10 @@ class ContractInterfaceTests(unittest.TestCase):
         self.assertEqual(obstacle.center_xyz, center)
         self.assertEqual(visual_radius, DEFAULT_CONFIG.human_hand_zone_radius)
         self.assertEqual(visual_length, DEFAULT_CONFIG.human_hand_zone_length)
-        self.assertEqual(obstacle.radius, DEFAULT_CONFIG.human_hand_planning_radius)
-        self.assertEqual(obstacle.height, DEFAULT_CONFIG.human_hand_zone_radius * 2.0)
+        # 人手区已改为 HORIZONTAL_CYLINDER 精确建模：
+        # radius = 横截面半径 (human_hand_zone_radius), height = 长度 (human_hand_zone_length)
+        self.assertEqual(obstacle.radius, DEFAULT_CONFIG.human_hand_zone_radius)
+        self.assertEqual(obstacle.height, DEFAULT_CONFIG.human_hand_zone_length)
         self.assertEqual(orientation_rpy, (0.0, math.pi / 2.0, 0.0))
 
     def test_main_demo_accepts_obstacle_mode_without_piece_attachment(self):
