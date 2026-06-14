@@ -52,16 +52,16 @@ B 不要自己硬编码棋盘和棋子尺寸，统一从 `src/common/config.py` 
 ```python
 board_cols = config.board_cols      # 默认 9
 board_rows = config.board_rows      # 默认 10
-cell_size = config.cell_size        # 默认 0.04 m
-piece_radius = config.piece_radius  # 默认 0.015 m
-piece_height = config.piece_height  # 默认 0.012 m
+cell_size = config.cell_size        # 默认 0.06 m
+piece_radius = config.piece_radius  # 默认 0.0225 m
+piece_height = config.piece_height  # 默认 0.018 m
 ```
 
 棋盘平板可以按下面方式推导：
 
 ```python
-board_width = config.board_cols * config.cell_size   # 默认 0.36 m
-board_depth = config.board_rows * config.cell_size   # 默认 0.40 m
+board_width = config.board_cols * config.cell_size   # 默认 0.54 m
+board_depth = config.board_rows * config.cell_size   # 默认 0.60 m
 ```
 
 棋子可视化可以用 cylinder primitive：半径用 `config.piece_radius`，高度用 `config.piece_height`。C 做避障时会使用 `config.inflated_piece_radius`，B 不要把 inflated radius 当成棋子的真实显示半径。

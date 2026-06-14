@@ -5,14 +5,14 @@ from dataclasses import replace
 from typing import Callable
 
 from src.common.config import DEFAULT_CONFIG, Config
-from src.common.types import BoardState, LogicalAction, MoveCommand, PieceColor, RobotHandle, SceneHandle
+from src.common.types import BoardState, ExecutionResult, JointTrajectory, LogicalAction, MoveCommand, PieceColor, RobotHandle, SceneHandle
 from src.control.controller import execute_trajectory
 from src.control.logger import summarize_execution
 from src.interaction.board_state import create_initial_board, make_logical_actions
 from src.interaction.chess_rules import validate_move
 from src.interaction.cli import parse_command
 from src.interaction.gui import poll_gui_command
-from src.planning.motion_primitives import build_motion_primitives
+from src.planning.motion_primitives import build_motion_primitives, get_action_primitive_ranges
 from src.planning.obstacle_map import build_primitive_obstacle_contexts
 from src.planning.trajectory_planner import plan_trajectory
 from src.simulation.attachment import attach_piece, detach_piece
@@ -56,12 +56,31 @@ def run_command(
     })
     trajectory = plan_trajectory(planning_contexts, config=config)
 
-    should_attach_piece = command.command_type == "move" and command.from_cell in board.pieces
-    if should_attach_piece:
-        attach_piece(piece_id=board.pieces[command.from_cell].piece_id, end_effector_id=robot.end_effector_id)
-    execution = execute_trajectory(trajectory)
-    if should_attach_piece:
-        detach_piece(piece_id=board.pieces[command.from_cell].piece_id)
+    # 按 action 分段执行，在 pick/place 对之间切换 attach/detach 目标。
+    # 这样吃子时敌方棋子也能正确吸附跟随、到达 captured area 后释放，
+    # 然后机械臂再去抓取己方棋子。
+    action_ranges = get_action_primitive_ranges(actions)
+    accumulated: list[ExecutionResult] = []
+    attached_piece_id: str = ""
+    for i, action in enumerate(actions):
+        start, end = action_ranges[i]
+        segment = JointTrajectory(
+            joint_waypoints=trajectory.joint_waypoints[start:end],
+            speed_profile=trajectory.speed_profile[start:end],
+        )
+
+        if action.action_type == "pick" and action.piece_id:
+            attached_piece_id = action.piece_id
+            attach_piece(piece_id=action.piece_id, end_effector_id=robot.end_effector_id)
+
+        segment_result = execute_trajectory(segment)
+        accumulated.append(segment_result)
+
+        if action.action_type == "place" and attached_piece_id:
+            detach_piece(piece_id=attached_piece_id)
+            attached_piece_id = ""
+
+    execution = _merge_executions(accumulated)
 
     if execution.success:
         apply_logical_actions(board, actions)
@@ -189,6 +208,29 @@ def _refresh_captured_counts(board: BoardState) -> None:
         if cell.startswith("CAPTURED_"):
             counts[piece.color] += 1
     board.captured_counts = counts
+
+
+def _merge_executions(segments: list[ExecutionResult]) -> ExecutionResult:
+    """将多个分段执行结果合并为一个 ExecutionResult。"""
+    if not segments:
+        return ExecutionResult(
+            success=True,
+            desired_joint_angles=[],
+            actual_joint_angles=[],
+            joint_errors=[],
+            end_effector_errors=[],
+            obstacle_clearances=[],
+            execution_time=0.0,
+        )
+    return ExecutionResult(
+        success=all(segment.success for segment in segments),
+        desired_joint_angles=[wp for segment in segments for wp in segment.desired_joint_angles],
+        actual_joint_angles=[wp for segment in segments for wp in segment.actual_joint_angles],
+        joint_errors=[e for segment in segments for e in segment.joint_errors],
+        end_effector_errors=[e for segment in segments for e in segment.end_effector_errors],
+        obstacle_clearances=[c for segment in segments for c in segment.obstacle_clearances],
+        execution_time=round(sum(segment.execution_time for segment in segments), 3),
+    )
 
 
 def main() -> None:

@@ -180,9 +180,11 @@ class ContractInterfaceTests(unittest.TestCase):
         mode_3 = build_obstacle_preset("mode_3", DEFAULT_CONFIG)
 
         self.assertEqual(cells_for("mode_1"), [(4, 5)])
-        self.assertEqual(cells_for("mode_2"), [(3, 5), (5, 5)])
+        self.assertEqual(cells_for("mode_2"), [(2, 5), (5, 5)])
         self.assertEqual(cells_for("mode_3"), [(2, 5), (4, 6), (6, 5)])
-        self.assertTrue(all(obstacle.radius == 0.045 for obstacle in mode_1 + mode_2 + mode_3))
+        self.assertTrue(all(obstacle.radius == 0.05 for obstacle in mode_1))
+        self.assertTrue(all(obstacle.radius == 0.025 for obstacle in mode_2))
+        self.assertTrue(all(obstacle.radius == 0.045 for obstacle in mode_3))
         self.assertTrue(all(obstacle.height == 0.30 for obstacle in mode_1 + mode_2 + mode_3))
 
     def test_member_a_day_one_command_validation_edges(self):

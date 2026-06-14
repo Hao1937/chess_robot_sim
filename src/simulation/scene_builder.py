@@ -844,6 +844,7 @@ def build_obstacle_preset(obstacle_mode: str, config: Config = DEFAULT_CONFIG) -
         "mode_1": 0.05,
         "mode_2": 0.025,
         "mode_3": 0.045,
+        "none": 0.0,
     }
     cells = presets.get(obstacle_mode)
     if cells is None:

@@ -23,7 +23,26 @@ def build_motion_primitives(actions: list[LogicalAction], config: Config = DEFAU
             primitives.append(MotionPrimitive("retreat", action.cell, cell_above_world(action.cell, config), "safe", action.piece_id))
         elif action.action_type == "safety_pause":
             primitives.append(MotionPrimitive("pause", action.cell, (0.0, 0.0, config.z_safe), "safe"))
-        #elif action.action_type == ''
         else:
             print('Error, primitives not defined!')
     return primitives
+
+
+def get_action_primitive_ranges(actions: list[LogicalAction]) -> list[tuple[int, int]]:
+    """返回每个 LogicalAction 对应的 motion primitive 的 [start, end) 索引区间。
+
+    这使得 main.py 可以在每个 pick/place 对之间切换 attach/detach 目标，
+    解决吃子时多棋子搬运的吸附覆盖问题。
+    """
+    ranges: list[tuple[int, int]] = []
+    offset = 0
+    for action in actions:
+        if action.action_type in ("pick", "place"):
+            count = 4  # approach, descend, grasp/lift 或 transfer, descend, detach, retreat
+        elif action.action_type == "safety_pause":
+            count = 1
+        else:
+            count = 1
+        ranges.append((offset, offset + count))
+        offset += count
+    return ranges
