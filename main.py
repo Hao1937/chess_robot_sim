@@ -59,26 +59,95 @@ def run_command(
     # 按 action 分段执行，在 pick/place 对之间切换 attach/detach 目标。
     # 这样吃子时敌方棋子也能正确吸附跟随、到达 captured area 后释放，
     # 然后机械臂再去抓取己方棋子。
-    action_ranges = get_action_primitive_ranges(actions)
+    #
+    # 关键设计：attach 必须在 EE 到达棋子位置后（descend 完成后）调用，
+    # 这样棋子不需要瞬移，子部件（装饰环、顶盖）通过约束保持跟随。
+    # 同样，detach 在 retreat 前调用，确保棋子先释放再移开。
+    action_prim_ranges = get_action_primitive_ranges(actions)
+    primitive_ranges = trajectory.primitive_ranges
     accumulated: list[ExecutionResult] = []
     attached_piece_id: str = ""
     for i, action in enumerate(actions):
-        start, end = action_ranges[i]
-        segment = JointTrajectory(
-            joint_waypoints=trajectory.joint_waypoints[start:end],
-            speed_profile=trajectory.speed_profile[start:end],
-        )
+        prim_start, prim_end = action_prim_ranges[i]
+
+        if not primitive_ranges or prim_start >= len(primitive_ranges):
+            # 向后兼容：primitive_ranges 不可用时回退到旧行为
+            wp_start, wp_end = prim_start, prim_end
+            if action.action_type == "pick" and action.piece_id:
+                attached_piece_id = action.piece_id
+                attach_piece(piece_id=action.piece_id, end_effector_id=robot.end_effector_id)
+            segment_result = execute_trajectory(
+                JointTrajectory(
+                    joint_waypoints=trajectory.joint_waypoints[wp_start:wp_end],
+                    speed_profile=trajectory.speed_profile[wp_start:wp_end],
+                )
+            )
+            accumulated.append(segment_result)
+            if action.action_type == "place" and attached_piece_id:
+                detach_piece(piece_id=attached_piece_id)
+                attached_piece_id = ""
+            continue
 
         if action.action_type == "pick" and action.piece_id:
+            # ── pick：先 approach+descend 到达棋子，再 attach，最后 grasp+lift ──
+            # 前段：approach + descend (primitives prim_start .. prim_start+1)
+            pre_end = prim_start + 2  # approach=0, descend=1 → end=2
+            wp_pre_start = primitive_ranges[prim_start][0]
+            wp_pre_end = primitive_ranges[pre_end - 1][1]
+            pre_segment = JointTrajectory(
+                joint_waypoints=trajectory.joint_waypoints[wp_pre_start:wp_pre_end],
+                speed_profile=trajectory.speed_profile[wp_pre_start:wp_pre_end],
+            )
+            accumulated.append(execute_trajectory(pre_segment))
+
+            # 在 EE 已到达棋子位置时吸附
             attached_piece_id = action.piece_id
             attach_piece(piece_id=action.piece_id, end_effector_id=robot.end_effector_id)
 
-        segment_result = execute_trajectory(segment)
-        accumulated.append(segment_result)
+            # 后段：grasp + lift (primitives prim_start+2 .. prim_start+3)
+            if prim_end > pre_end:
+                wp_post_start = primitive_ranges[pre_end][0]
+                wp_post_end = primitive_ranges[prim_end - 1][1]
+                post_segment = JointTrajectory(
+                    joint_waypoints=trajectory.joint_waypoints[wp_post_start:wp_post_end],
+                    speed_profile=trajectory.speed_profile[wp_post_start:wp_post_end],
+                )
+                accumulated.append(execute_trajectory(post_segment))
 
-        if action.action_type == "place" and attached_piece_id:
+        elif action.action_type == "place" and attached_piece_id:
+            # ── place：先 transfer+descend 到达目标，再 detach，最后 retreat ──
+            pre_end = prim_start + 2  # transfer=0, descend=1 → end=2
+            wp_pre_start = primitive_ranges[prim_start][0]
+            wp_pre_end = primitive_ranges[pre_end - 1][1]
+            pre_segment = JointTrajectory(
+                joint_waypoints=trajectory.joint_waypoints[wp_pre_start:wp_pre_end],
+                speed_profile=trajectory.speed_profile[wp_pre_start:wp_pre_end],
+            )
+            accumulated.append(execute_trajectory(pre_segment))
+
+            # 在 retreat 前释放棋子
             detach_piece(piece_id=attached_piece_id)
             attached_piece_id = ""
+
+            # 后段：detach + retreat (primitives prim_start+2 .. prim_start+3)
+            if prim_end > pre_end:
+                wp_post_start = primitive_ranges[pre_end][0]
+                wp_post_end = primitive_ranges[prim_end - 1][1]
+                post_segment = JointTrajectory(
+                    joint_waypoints=trajectory.joint_waypoints[wp_post_start:wp_post_end],
+                    speed_profile=trajectory.speed_profile[wp_post_start:wp_post_end],
+                )
+                accumulated.append(execute_trajectory(post_segment))
+
+        else:
+            # ── safety_pause 等无需 attach/detach 的动作 ──
+            wp_start = primitive_ranges[prim_start][0]
+            wp_end = primitive_ranges[prim_end - 1][1] if prim_end > prim_start else wp_start
+            segment = JointTrajectory(
+                joint_waypoints=trajectory.joint_waypoints[wp_start:wp_end],
+                speed_profile=trajectory.speed_profile[wp_start:wp_end],
+            )
+            accumulated.append(execute_trajectory(segment))
 
     execution = _merge_executions(accumulated)
 

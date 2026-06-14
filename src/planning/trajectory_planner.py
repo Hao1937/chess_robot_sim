@@ -41,6 +41,7 @@ def plan_trajectory(
     """
     cartesian_waypoints: list[tuple[float, float, float]] = []
     speed_profile: list[str] = []
+    primitive_ranges: list[tuple[int, int]] = []
 
     for item in primitives_or_contexts:
         if isinstance(item, PrimitivePlanningContext):
@@ -49,6 +50,8 @@ def plan_trajectory(
         else:
             primitive = item
             primitive_obstacles = obstacles or []
+
+        wp_before = len(cartesian_waypoints)
 
         if primitive.primitive_type in ("approach", "transfer"):
             _plan_horizontal_segment(
@@ -63,21 +66,32 @@ def plan_trajectory(
                 enable_interpolation, config,
             )
 
+        wp_after = len(cartesian_waypoints)
+        primitive_ranges.append((wp_before, wp_after))
+
     # ── 确保 speed_profile 与 waypoints 等长 ──
     while len(speed_profile) < len(cartesian_waypoints):
         speed_profile.append("safe")
     speed_profile = speed_profile[:len(cartesian_waypoints)]
 
-    # ── IK 转换 ──
-    joint_waypoints = [solve_ik(wp, config) for wp in cartesian_waypoints]
+    # ── IK 转换（链式：前一个解作为下一个的种子，确保解分支连续）──
+    joint_waypoints: list[tuple[float, ...]] = []
+    seed = config.home_pose[:6]
+    for wp in cartesian_waypoints:
+        jw = solve_ik(wp, config, seed=seed)
+        joint_waypoints.append(jw)
+        seed = jw
 
     # ── 关节空间平滑 ──
+    # 链式 IK 种子的使用使得邻近 waypoint 的关节配置连续，
+    # 平滑不再产生物理无意义的混合。
     if enable_smoothing and len(joint_waypoints) >= 3:
         joint_waypoints = smooth_joint_trajectory(joint_waypoints)
 
     return JointTrajectory(
         joint_waypoints=joint_waypoints,
         speed_profile=speed_profile[:len(joint_waypoints)],
+        primitive_ranges=primitive_ranges,
     )
 
 

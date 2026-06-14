@@ -19,8 +19,7 @@ _INITIAL_PIECES = tuple(
 _BOARD_LINE_COLOR = (0.18, 0.10, 0.04)
 _BOARD_TEXT_COLOR = (0.24, 0.11, 0.03)
 _PIECE_WOOD_COLOR = (0.78, 0.56, 0.30, 1.0)
-_PIECE_SIDE_COLOR = (0.55, 0.34, 0.16, 1.0)
-_PIECE_TOP_COLOR = (0.88, 0.68, 0.40, 1.0)
+
 _RED_TEXT_COLOR = (0.75, 0.02, 0.02)
 _BLACK_TEXT_COLOR = (0.02, 0.02, 0.02)
 _WAYPOINT_DEBUG_IDS: list[int] = []
@@ -665,66 +664,10 @@ def _create_piece(
         specularColor=(0.28, 0.18, 0.08),
         physicsClientId=client_id,
     )
-    for z_offset, radius_scale, height_scale in (
-        (0.0012, 1.015, 0.08),
-        (config.piece_height - 0.0012, 1.0, 0.07),
-    ):
-        trim_visual_id = p.createVisualShape(
-            p.GEOM_CYLINDER,
-            radius=config.piece_radius * radius_scale,
-            length=config.piece_height * height_scale,
-            rgbaColor=_PIECE_SIDE_COLOR,
-            physicsClientId=client_id,
-        )
-        trim_id = p.createMultiBody(
-            baseMass=0.0,
-            baseCollisionShapeIndex=-1,
-            baseVisualShapeIndex=trim_visual_id,
-            basePosition=(x, y, z + z_offset),
-            physicsClientId=client_id,
-        )
-        trim_constraint_id = p.createConstraint(
-            parentBodyUniqueId=body_id,
-            parentLinkIndex=-1,
-            childBodyUniqueId=trim_id,
-            childLinkIndex=-1,
-            jointType=p.JOINT_FIXED,
-            jointAxis=(0.0, 0.0, 0.0),
-            parentFramePosition=(0.0, 0.0, z_offset - config.piece_height / 2.0),
-            childFramePosition=(0.0, 0.0, 0.0),
-            physicsClientId=client_id,
-        )
-        RUNTIME.scene_body_ids.append(trim_id)
-        RUNTIME.attachment_constraints[f"{piece_id}_trim_{z_offset:.4f}"] = trim_constraint_id
-    top_visual_id = p.createVisualShape(
-        p.GEOM_CYLINDER,
-        radius=config.piece_radius * 0.94,
-        length=config.piece_height * 0.12,
-        rgbaColor=_PIECE_TOP_COLOR,
-        physicsClientId=client_id,
-    )
-    top_id = p.createMultiBody(
-        baseMass=0.0,
-        baseCollisionShapeIndex=-1,
-        baseVisualShapeIndex=top_visual_id,
-        basePosition=(x, y, z + config.piece_height + 0.001),
-        physicsClientId=client_id,
-    )
-    constraint_id = p.createConstraint(
-        parentBodyUniqueId=body_id,
-        parentLinkIndex=-1,
-        childBodyUniqueId=top_id,
-        childLinkIndex=-1,
-        jointType=p.JOINT_FIXED,
-        jointAxis=(0.0, 0.0, 0.0),
-        parentFramePosition=(0.0, 0.0, config.piece_height / 2.0 + 0.001),
-        childFramePosition=(0.0, 0.0, 0.0),
-        physicsClientId=client_id,
-    )
+    # 文字标签盘（动态质量 0.001，确保吸附/释放时能跟随主 body 运动）
+    # 不使用装饰环和顶盖，简化为圆柱 + 文字贴图两层结构
     label_id, label_constraint_id = _create_piece_label(body_id, piece_id, label, color, (x, y, z), config, client_id)
     RUNTIME.scene_body_ids.append(body_id)
-    RUNTIME.scene_body_ids.append(top_id)
-    RUNTIME.attachment_constraints[f"{piece_id}_top_cap"] = constraint_id
     if label_id is not None:
         RUNTIME.scene_body_ids.append(label_id)
     if label_constraint_id is not None:

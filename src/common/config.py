@@ -14,12 +14,13 @@ class Config:
     z_safe: float = 0.18
     piece_radius: float = 0.0225
     piece_height: float = 0.018
+    suction_cup_length: float = 0.037
     end_effector_radius: float = 0.012
     safety_margin: float = 0.015
     home_pose: tuple[float, ...] = (0.0, -0.8, 1.2, -0.4, 0.0, 0.0)
     fast_speed_scale: float = 1.0
     safe_speed_scale: float = 0.35
-    base_link_position: tuple[float, float, float] = (0.32, -0.25, 0.0)
+    base_link_position: tuple[float, float, float] = (0.24, -0.25, 0.12)
     base_link_orientation_rpy: tuple[float, float, float]=(0, 0, 0)
     human_hand_zone_col: int = 4
     human_hand_zone_row: int = 7

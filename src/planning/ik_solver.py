@@ -50,23 +50,35 @@ def _get_pyb_ik_context() -> dict | None:
     return _PYB_IK_CTX
 
 
-def solve_ik(target_xyz: tuple[float, float, float], config: Config = DEFAULT_CONFIG) -> tuple[float, ...]:
+def solve_ik(
+    target_xyz: tuple[float, float, float],
+    config: Config = DEFAULT_CONFIG,
+    *,
+    seed: tuple[float, ...] | None = None,
+) -> tuple[float, ...]:
     """Solve UR5 inverse kinematics for a target point.
 
     优先使用 PyBullet 内置 IK（保证与 URDF 运动学一致），
     失败或不可用时回退到数值 IK（使用正确 FK 的 Jacobian 迭代法）。
+
+    Args:
+        target_xyz: 目标 EE 世界坐标
+        config: 配置对象
+        seed: 可选的初始关节猜测（6 元组），用于确保邻近路径点的解分支连续性
     """
-    pyb_solution = _solve_ik_pybullet(target_xyz, config)
+    pyb_solution = _solve_ik_pybullet(target_xyz, config, seed=seed)
     if pyb_solution is not None:
         return pyb_solution
 
     # ── 数值 IK fallback ──
-    return _solve_ik_numerical(target_xyz, config)
+    return _solve_ik_numerical(target_xyz, config, seed=seed)
 
 
 def _solve_ik_pybullet(
     target_xyz: tuple[float, float, float],
     config: Config = DEFAULT_CONFIG,
+    *,
+    seed: tuple[float, ...] | None = None,
 ) -> tuple[float, ...] | None:
     """使用 PyBullet 内置 IK 求解，保证与 URDF 模型运动学一致。
 
@@ -74,6 +86,7 @@ def _solve_ik_pybullet(
     - 优先使用 DLS solver（对奇异位形更鲁棒）
     - 失败时尝试 SDLS solver
     - 如果带姿态约束失败，尝试仅位置 IK
+    - seed 参数提供初始关节猜测，确保邻近点解分支连续
     """
     ctx = _get_pyb_ik_context()
     if ctx is None:
@@ -88,15 +101,20 @@ def _solve_ik_pybullet(
     # 目标在世界坐标系下的位置（PyBullet IK 使用世界坐标）
     target_pos = [target_xyz[0], target_xyz[1], target_xyz[2]]
 
-    # 工具姿态：绕 x 轴转 π（z 向下）
-    target_orn = p.getQuaternionFromEuler((math.pi, 0.0, 0.0))
+    # 工具姿态：绕 x 轴转 -π/2，使 tool0 的 z 轴指向世界 -z（竖直向下）
+    # tool0 本地 z 轴 = wrist_3 的 y 轴 = (0, 1, 0)（由固定关节 rpy=(-π/2,0,0) 决定）
+    # Rx(-π/2) · (0, 1, 0) = (0, 0, -1) ✓
+    target_orn = p.getQuaternionFromEuler((-math.pi / 2, 0.0, 0.0))
+
+    # restPoses 使用 seed（如果提供）或 home_pose
+    rest_poses = list(seed) if seed is not None else list(config.home_pose[:6])
 
     # 尝试多种 solver 组合
     strategies = [
         # (solver, use_orientation, rest_poses, joint_damping)
-        (getattr(p, "IK_DLS", None), True, list(config.home_pose[:6]), None),
-        (getattr(p, "IK_SDLS", None), True, list(config.home_pose[:6]), None),
-        (getattr(p, "IK_DLS", None), False, list(config.home_pose[:6]), None),
+        (getattr(p, "IK_DLS", None), True, rest_poses, None),
+        (getattr(p, "IK_SDLS", None), True, rest_poses, None),
+        (getattr(p, "IK_DLS", None), False, rest_poses, None),
     ]
 
     for solver, use_orn, rest_poses, damping in strategies:
@@ -184,11 +202,12 @@ def _solve_ik_numerical(
     max_iters: int = 300,
     tolerance: float = 0.001,
     damping: float = 0.15,
+    seed: tuple[float, ...] | None = None,
 ) -> tuple[float, ...]:
     """Numerical IK using damped least squares Jacobian pseudo-inverse.
 
     使用 URDF 链 FK 保证与 PyBullet 模型完全一致。
-    从 home pose 开始迭代，对奇异位形和关节极限具有鲁棒性。
+    从 seed（或 home pose）开始迭代，对奇异位形和关节极限具有鲁棒性。
 
     Args:
         target_xyz: target EE position in world frame
@@ -196,14 +215,15 @@ def _solve_ik_numerical(
         max_iters: maximum iterations
         tolerance: convergence threshold (m)
         damping: damping factor for singularity robustness
+        seed: optional initial joint guess for consistent solution branches
 
     Returns:
-        6 joint angles (rad), or home_pose if no solution found
+        6 joint angles (rad), or seed/home_pose if no solution found
     """
-    from src.control.fk_solver import _solve_fk_urdf_chain
+    from src.control.fk_solver import _solve_fk_urdf_chain, _get_tool0_z_axis
 
-    # 初始猜测：home pose
-    theta = list(config.home_pose[:6])
+    # 初始猜测：seed（如果提供）或 home pose
+    theta = list(seed) if seed is not None else list(config.home_pose[:6])
 
     best_theta = list(theta)
     best_error = float("inf")
@@ -218,27 +238,34 @@ def _solve_ik_numerical(
         ]
         error = math.sqrt(sum(e**2 for e in error_vec))
 
-        # 跟踪最佳解
+        # 跟踪最佳解（同时考虑朝向）
         if error < best_error:
             best_error = error
             best_theta = list(theta)
 
         if error < tolerance:
-            return tuple(round(_wrap_to_pi(t), 4) for t in theta)
+            # 位置收敛 — 运行零空间朝向优化后返回
+            result = _nullspace_optimize_orientation(tuple(theta), target_xyz, config)
+            return result
 
         # 计算数值 Jacobian (3×6)
         J = _compute_jacobian(tuple(theta), config)
 
         # Damped least squares: Δθ = J^T (J·J^T + λ²·I)⁻¹ · e
-        delta = _dls_step(J, error_vec, damping)
+        delta_pos = _dls_step(J, error_vec, damping)
+
+        # ── Null-space orientation optimisation ──
+        # Compute orientation gradient and project into position null-space
+        g_orient = _orientation_gradient(tuple(theta), config)
+        delta_null = _nullspace_project(J, delta_pos, g_orient, damping)
 
         # 更新关节角度并限制在范围内
         for j in range(6):
-            theta[j] += delta[j]
+            theta[j] += delta_null[j]
             lo, hi = _JOINT_LIMITS[j]
             theta[j] = max(lo, min(hi, theta[j]))
 
-        # 自适应阻尼：误差大时增加阻尼避免振荡
+        # 自适应阻尼
         if error > 0.1:
             damping = 0.3
         elif error > 0.01:
@@ -246,11 +273,11 @@ def _solve_ik_numerical(
         else:
             damping = 0.05
 
-    # 返回最佳解
-    if best_error < 0.05:  # 5cm 以内可接受
-        return tuple(round(_wrap_to_pi(t), 4) for t in best_theta)
+    # 返回最佳解（同样做零空间优化）
+    if best_error < 0.05:
+        result = _nullspace_optimize_orientation(tuple(best_theta), target_xyz, config)
+        return result
 
-    # 完全失败：返回 home pose
     return config.home_pose[:6]
 
 
@@ -458,3 +485,145 @@ def _clamp(value: float, lower: float = -1.0, upper: float = 1.0) -> float:
 
 def _wrap_to_pi(angle: float) -> float:
     return (angle + math.pi) % (2.0 * math.pi) - math.pi
+
+
+def _orientation_gradient(
+    theta: tuple[float, ...],
+    config: Config,
+    delta: float = 0.002,
+) -> list[float]:
+    """Gradient of downward score = -zz w.r.t. each joint angle.
+
+    Returns a 6-vector: g[j] = ∂(-zz)/∂θj
+    """
+    from src.control.fk_solver import _get_tool0_z_axis
+
+    _, _, zz0 = _get_tool0_z_axis(theta, config)
+    grad = [0.0] * 6
+    for j in range(6):
+        t_plus = list(theta)
+        t_plus[j] += delta
+        _, _, zz_p = _get_tool0_z_axis(tuple(t_plus), config)
+        grad[j] = (-zz_p - (-zz0)) / delta
+    return grad
+
+
+def _nullspace_project(
+    J: list[list[float]],       # 3×6 position Jacobian
+    delta_pos: list[float],     # 6-vector from DLS
+    g_orient: list[float],      # 6-vector orientation gradient
+    damping: float,
+) -> list[float]:
+    """Project orientation gradient into position Jacobian null-space.
+
+    Computes:
+      J⁺ = J^T (J·J^T + λ²I)⁻¹    (damped pseudo-inverse, 6×3)
+      N  = I - J⁺·J                (null-space projector, 6×6)
+      Δθ = Δθ_pos + α · N · g_orient
+
+    This uses the arm's redundant DOF to optimise orientation
+    without disturbing the end-effector position.
+    """
+    # J·J^T (3×3)
+    JJT = [[0.0] * 3 for _ in range(3)]
+    for i in range(3):
+        for k in range(3):
+            s = 0.0
+            for j in range(6):
+                s += J[i][j] * J[k][j]
+            JJT[i][k] = s
+
+    lam_sq = damping * damping
+    A = [[JJT[i][k] + (lam_sq if i == k else 0.0) for k in range(3)] for i in range(3)]
+
+    # J⁺ = J^T · A⁻¹  (6×3)
+    # For each column of A⁻¹, compute J^T times that column
+    # We need J⁺ applied to (J · g_orient) efficiently:
+    #   N · g = (I - J⁺J) · g = g - J⁺ · (J · g)
+    # So: β = J · g_orient (3×1), then α = solve(A, β) (3×1), then J⁺β = J^T · α (6×1)
+
+    # β = J · g_orient
+    beta = [0.0] * 3
+    for i in range(3):
+        s = 0.0
+        for j in range(6):
+            s += J[i][j] * g_orient[j]
+        beta[i] = s
+
+    # α = A⁻¹ · β (solve A·α = β)
+    alpha = _solve_3x3(A, beta)
+
+    # J⁺β = J^T · α
+    jt_alpha = [0.0] * 6
+    for j in range(6):
+        s = 0.0
+        for i in range(3):
+            s += J[i][j] * alpha[i]
+        jt_alpha[j] = s
+
+    # N · g = g - J⁺ · J · g = g - J⁺β = g - J^T·α
+    null_grad = [g_orient[j] - jt_alpha[j] for j in range(6)]
+
+    # Combine: Δθ_pos + scale * N·g
+    scale = 0.08
+    result = [delta_pos[j] + scale * null_grad[j] for j in range(6)]
+    return result
+
+
+def _nullspace_optimize_orientation(
+    joint_angles: tuple[float, ...],
+    target_xyz: tuple[float, float, float],
+    config: Config,
+    max_iters: int = 80,
+) -> tuple[float, ...]:
+    """Post-convergence null-space orientation refinement.
+
+    After position IK converges, interleave null-space orientation steps
+    with position corrections to maintain accuracy while pointing downward.
+    """
+    from src.control.fk_solver import _get_tool0_z_axis, _solve_fk_urdf_chain
+
+    theta = list(joint_angles)
+
+    for outer in range(10):
+        # Orientation steps (5 at a time)
+        for _ in range(5):
+            _, _, zz = _get_tool0_z_axis(tuple(theta), config)
+            if -zz > 0.92:
+                break
+            J = _compute_jacobian(tuple(theta), config)
+            g_orient = _orientation_gradient(tuple(theta), config)
+            delta_null = _nullspace_project(J, [0.0] * 6, g_orient, 0.08)
+            for j in range(6):
+                theta[j] += delta_null[j]
+                lo, hi = _JOINT_LIMITS[j]
+                theta[j] = max(lo, min(hi, theta[j]))
+
+        # Position correction (correct any drift)
+        current = _solve_fk_urdf_chain(tuple(theta), config)
+        err_vec = [target_xyz[i] - current[i] for i in range(3)]
+        err = math.sqrt(sum(e**2 for e in err_vec))
+        if err > 0.002:
+            J = _compute_jacobian(tuple(theta), config)
+            delta_pos = _dls_step(J, err_vec, 0.08)
+            for j in range(6):
+                theta[j] += delta_pos[j]
+                lo, hi = _JOINT_LIMITS[j]
+                theta[j] = max(lo, min(hi, theta[j]))
+
+        # Check combined convergence
+        _, _, zz = _get_tool0_z_axis(tuple(theta), config)
+        current = _solve_fk_urdf_chain(tuple(theta), config)
+        pos_err = math.sqrt(sum((current[i] - target_xyz[i])**2 for i in range(3)))
+        if -zz > 0.85 and pos_err < 0.004:
+            break
+
+    return tuple(round(_wrap_to_pi(t), 4) for t in theta)
+
+
+def _frange(start: float, stop: float, step: float):
+    """Float range generator, inclusive of stop."""
+    v = start
+    while v <= stop + step * 0.5:
+        yield v
+        v += step

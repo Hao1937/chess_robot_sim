@@ -126,6 +126,9 @@ class PrimitivePlanningContext:
 class JointTrajectory:
     joint_waypoints: list[tuple[float, ...]]
     speed_profile: list[str]
+    primitive_ranges: list[tuple[int, int]] | None = None
+    """每个 MotionPrimitive 在 joint_waypoints 中的 [start, end) 索引。
+    由 plan_trajectory() 填充；main.py 用于按 action 分段执行。"""
 
 
 @dataclass(frozen=True)

@@ -428,5 +428,298 @@ class ContractInterfaceTests(unittest.TestCase):
         self.assertEqual(command.to_cell, "G4")
 
 
+    # ── PyBullet 实物仿真测试 ──
+
+    def test_piece_attaches_and_follows_end_effector_in_pybullet(self):
+        """验证棋子（含子部件三层）吸附后跟随末端执行器运动。
+
+        测试流程：
+        1. 在 DIRECT 模式创建 PyBullet 场景，加载 UR5 + 创建一个棋子
+        2. 将机械臂关节置为指向棋子上方的 pose，步进使 EE 到达
+        3. 调用 attach_piece 吸附棋子
+        4. 将关节移到新 target（模拟 lift），步进仿真
+        5. 断言棋子位置跟随 EE（位置误差 < 2cm）
+        6. 调用 detach_piece 释放，恢复质量/碰撞
+        """
+        import math
+        import os
+
+        from src.simulation._runtime import pybullet_available
+
+        if not pybullet_available():
+            self.skipTest("PyBullet 不可用")
+
+        # 强制 DIRECT 模式（无 GUI）
+        os.environ["CHESS_ROBOT_PYBULLET_GUI"] = "0"
+
+        from src.common.config import DEFAULT_CONFIG
+        from src.planning.chessboard_mapping import cell_to_world
+        from src.simulation._runtime import RUNTIME, clear_scene_bodies, ensure_client, p
+
+        # ── 隔离：断开可能由其他测试残留的 PyBullet 连接 ──
+        if RUNTIME.client_id is not None:
+            try:
+                p.disconnect(RUNTIME.client_id)
+            except Exception:
+                pass
+        RUNTIME.client_id = None
+        RUNTIME.robot_id = None
+        RUNTIME.end_effector_id = None
+        RUNTIME.joint_indices = ()
+        RUNTIME.scene_body_ids.clear()
+        RUNTIME.piece_body_ids.clear()
+        RUNTIME.piece_cells.clear()
+        RUNTIME.piece_ids_by_cell.clear()
+        RUNTIME.attachment_constraints.clear()
+
+        client_id = ensure_client()
+        self.assertIsNotNone(client_id, "无法创建 PyBullet 客户端")
+
+        try:
+            # ── 加载机器人 ──
+            from src.simulation.load_robot import load_robot
+
+            robot = load_robot()
+            self.assertIsNotNone(RUNTIME.robot_id)
+
+            # ── 创建一个测试棋子（单层主 body，无棋盘） ──
+            config = DEFAULT_CONFIG
+            cell = "A4"
+            x, y, z = cell_to_world(cell, config)
+            piece_radius = config.piece_radius
+            piece_height = config.piece_height
+
+            visual = p.createVisualShape(
+                p.GEOM_CYLINDER,
+                radius=piece_radius,
+                length=piece_height,
+                rgbaColor=(0.8, 0.6, 0.4, 1.0),
+                physicsClientId=client_id,
+            )
+            collision = p.createCollisionShape(
+                p.GEOM_CYLINDER,
+                radius=piece_radius,
+                height=piece_height,
+                physicsClientId=client_id,
+            )
+            piece_body = p.createMultiBody(
+                baseMass=0.02,
+                baseCollisionShapeIndex=collision,
+                baseVisualShapeIndex=visual,
+                basePosition=(x, y, z + piece_height / 2.0),
+                physicsClientId=client_id,
+            )
+            piece_id = "test_piece"
+            RUNTIME.piece_body_ids[piece_id] = piece_body
+            RUNTIME.scene_body_ids.append(piece_body)
+
+            # ── 创建文字标签盘（简化为圆柱 + 标签两层结构） ──
+            label_vis = p.createVisualShape(
+                p.GEOM_CYLINDER,
+                radius=piece_radius * 0.6,
+                length=0.002,
+                rgbaColor=(0.1, 0.1, 0.1, 1.0),
+                physicsClientId=client_id,
+            )
+            label_id = p.createMultiBody(
+                baseMass=0.001,
+                baseCollisionShapeIndex=-1,
+                baseVisualShapeIndex=label_vis,
+                basePosition=(x, y, z + piece_height + 0.004),
+                physicsClientId=client_id,
+            )
+            label_cid = p.createConstraint(
+                parentBodyUniqueId=piece_body,
+                parentLinkIndex=-1,
+                childBodyUniqueId=label_id,
+                childLinkIndex=-1,
+                jointType=p.JOINT_FIXED,
+                jointAxis=(0.0, 0.0, 0.0),
+                parentFramePosition=(0.0, 0.0, piece_height / 2.0 + 0.004),
+                childFramePosition=(0.0, 0.0, 0.0),
+                physicsClientId=client_id,
+            )
+            RUNTIME.scene_body_ids.append(label_id)
+            RUNTIME.attachment_constraints[f"{piece_id}_label"] = label_cid
+
+            # ── 确认棋子初始在棋盘高度 ──
+            initial_pos = p.getBasePositionAndOrientation(piece_body, physicsClientId=client_id)[0]
+            self.assertAlmostEqual(initial_pos[2], z + piece_height / 2.0, delta=0.005,
+                                   msg="棋子初始应在棋盘高度")
+
+            # ── 移动机械臂到棋子正上方（模拟 approach + descend 完成后的 pose） ──
+            from src.planning.ik_solver import solve_ik
+
+            grasp_target = (x, y, config.z_grasp)  # z_grasp ≈ 0.055m above board
+            grasp_joints = solve_ik(grasp_target, config)
+            # 用 IK 结果的关节角初始化电机 + 仿真步进使 EE 到达 grasp pose
+            for idx, joint_idx in enumerate(robot.joint_indices):
+                p.setJointMotorControl2(
+                    bodyUniqueId=RUNTIME.robot_id,
+                    jointIndex=joint_idx,
+                    controlMode=p.POSITION_CONTROL,
+                    targetPosition=grasp_joints[idx],
+                    force=1000,
+                    maxVelocity=10.0,
+                    positionGain=1.2,
+                    velocityGain=0.8,
+                    physicsClientId=client_id,
+                )
+                p.resetJointState(RUNTIME.robot_id, joint_idx, targetValue=grasp_joints[idx],
+                                  physicsClientId=client_id)
+            for _ in range(480):
+                p.stepSimulation(client_id)
+
+            ee_state = p.getLinkState(RUNTIME.robot_id, robot.end_effector_id, physicsClientId=client_id)
+            ee_z_before = ee_state[0][2]
+            self.assertLess(abs(ee_z_before - config.z_grasp), 0.03,
+                            f"EE 应接近 grasp 高度，实际 z={ee_z_before:.4f}")
+
+            # ── 吸附棋子 ──
+            from src.simulation.attachment import attach_piece, detach_piece, _get_all_piece_body_ids
+
+            result = attach_piece(piece_id=piece_id, end_effector_id=robot.end_effector_id)
+            self.assertTrue(result.success, f"attach 失败: {result.message}")
+
+            # 验证所有层都被找到（主 body + 标签盘 = 2 层）
+            all_ids = _get_all_piece_body_ids(piece_id, client_id)
+            self.assertIn(piece_body, all_ids, "主 body 应在列表中")
+            self.assertIn(label_id, all_ids, "标签盘应在列表中")
+            self.assertEqual(len(all_ids), 2, "应有 2 个 body（主 + label）")
+
+            # ── 验证子部件质量已改为正数（动态） ──
+            for bid in all_ids:
+                dyn = p.getDynamicsInfo(bid, -1, physicsClientId=client_id)
+                self.assertGreater(dyn[0], 0.0,
+                                   f"body {bid} 质量应为正（动态），实际 mass={dyn[0]}")
+
+            # ── 移动机械臂到 lift 高度（模拟吸起棋子） ──
+            # 不使用 resetJointState，让关节平滑移动到目标，
+            # 避免 EE 瞬跳导致约束 solver 难以收敛
+            lift_target = (x, y, config.z_safe)  # z_safe ≈ 0.18m
+            lift_joints = solve_ik(lift_target, config)
+            for idx, joint_idx in enumerate(robot.joint_indices):
+                p.setJointMotorControl2(
+                    bodyUniqueId=RUNTIME.robot_id,
+                    jointIndex=joint_idx,
+                    controlMode=p.POSITION_CONTROL,
+                    targetPosition=lift_joints[idx],
+                    force=1000,
+                    maxVelocity=10.0,
+                    positionGain=1.2,
+                    velocityGain=0.8,
+                    physicsClientId=client_id,
+                )
+            # 步进仿真让约束拉动棋子（更多步数确保标签盘约束充分沉降）
+            for _ in range(480):
+                p.stepSimulation(client_id)
+
+            # ── 验证棋子跟随 EE 到达 lift 高度 ──
+            # 棋子中心 = EE 连杆原点 z - suction_cup_length - piece_height/2
+            # （吸盘尖端接触棋子顶部）
+            ee_lift = p.getLinkState(RUNTIME.robot_id, robot.end_effector_id, physicsClientId=client_id)
+            piece_lift = p.getBasePositionAndOrientation(piece_body, physicsClientId=client_id)[0]
+
+            ee_lift_z = ee_lift[0][2]
+            piece_lift_z = piece_lift[2]
+            expected_piece_z = ee_lift_z - config.suction_cup_length - config.piece_height / 2.0
+            z_error = abs(expected_piece_z - piece_lift_z)
+
+            self.assertLess(z_error, 0.02,
+                            f"棋子中心应在吸盘尖端下方: EE z={ee_lift_z:.4f}, "
+                            f"expected piece z={expected_piece_z:.4f}, "
+                            f"actual piece z={piece_lift_z:.4f}, error={z_error:.4f}m")
+            self.assertGreater(piece_lift_z, config.z_grasp + 0.03,
+                               f"棋子应在 grasp 高度之上: z={piece_lift_z:.4f}")
+
+            # ── 验证标签盘也跟随主 body（JOINT_FIXED 约束） ──
+            label_pos = p.getBasePositionAndOrientation(label_id, physicsClientId=client_id)[0]
+            expected_label_z = piece_lift[2] + piece_height / 2.0 + 0.004
+            label_error = math.hypot(
+                piece_lift[0] - label_pos[0],
+                piece_lift[1] - label_pos[1],
+                expected_label_z - label_pos[2],
+            )
+            self.assertLess(label_error, 0.03,
+                            f"标签盘应跟随主 body: error={label_error:.4f}m")
+
+            # ── 移动机械臂到目标 cell（模拟 transfer） ──
+            target_cell = "A5"
+            tx, ty, tz = cell_to_world(target_cell, config)
+            transfer_target = (tx, ty, config.z_safe)
+            transfer_joints = solve_ik(transfer_target, config)
+            for idx, joint_idx in enumerate(robot.joint_indices):
+                p.setJointMotorControl2(
+                    bodyUniqueId=RUNTIME.robot_id,
+                    jointIndex=joint_idx,
+                    controlMode=p.POSITION_CONTROL,
+                    targetPosition=transfer_joints[idx],
+                    force=1000,
+                    maxVelocity=10.0,
+                    positionGain=1.2,
+                    velocityGain=0.8,
+                    physicsClientId=client_id,
+                )
+            for _ in range(480):
+                p.stepSimulation(client_id)
+
+            # ── 验证棋子跟随 EE 到达 transfer 目标 ──
+            # 由于 IK 解有轻微 FK 偏差，以 EE 实际位置为参考
+            ee_transfer = p.getLinkState(RUNTIME.robot_id, robot.end_effector_id, physicsClientId=client_id)
+            piece_transfer = p.getBasePositionAndOrientation(piece_body, physicsClientId=client_id)[0]
+
+            ee_xy = ee_transfer[0][:2]
+            piece_xy = piece_transfer[:2]
+            xy_error = math.hypot(piece_xy[0] - ee_xy[0], piece_xy[1] - ee_xy[1])
+            self.assertLess(xy_error, 0.02,
+                            f"棋子 xy 应紧贴 EE: EE=({ee_xy[0]:.4f},{ee_xy[1]:.4f}), "
+                            f"piece=({piece_xy[0]:.4f},{piece_xy[1]:.4f}), "
+                            f"error={xy_error:.4f}m")
+
+            # 棋子 z 也应接近 EE（JOINT_FIXED 约束，棋子中心在吸盘尖端下方）
+            expected_transfer_z = ee_transfer[0][2] - config.suction_cup_length - config.piece_height / 2.0
+            z_error = abs(piece_transfer[2] - expected_transfer_z)
+            self.assertLess(z_error, 0.02,
+                            f"棋子 z 应在吸盘尖端下方: EE z={ee_transfer[0][2]:.4f}, "
+                            f"piece z={piece_transfer[2]:.4f}, error={z_error:.4f}m")
+
+            # ── 释放棋子 ──
+            detach_result = detach_piece(piece_id=piece_id)
+            self.assertTrue(detach_result.success, f"detach 失败: {detach_result.message}")
+
+            # 约束应已移除
+            self.assertNotIn(piece_id, RUNTIME.attachment_constraints,
+                             "piece 吸附约束应已移除")
+
+            # ── 验证动力学恢复 ──
+            main_dyn = p.getDynamicsInfo(piece_body, -1, physicsClientId=client_id)
+            self.assertAlmostEqual(main_dyn[0], 0.02, delta=0.001,
+                                   msg="主 body 质量应恢复为 0.02")
+
+            # 标签盘应保持动态（mass=0.001），确保跟随主 body 下落
+            label_dyn = p.getDynamicsInfo(label_id, -1, physicsClientId=client_id)
+            self.assertAlmostEqual(label_dyn[0], 0.001, delta=0.001,
+                                   msg="标签盘应保持动态质量（0.001），避免静态拉扯导致浮空")
+
+        finally:
+            # 清理：断开 PyBullet 连接
+            cid = RUNTIME.client_id
+            if cid is not None:
+                try:
+                    p.disconnect(cid)
+                except Exception:
+                    pass
+            # 重置 RUNTIME 状态
+            RUNTIME.client_id = None
+            RUNTIME.robot_id = None
+            RUNTIME.end_effector_id = None
+            RUNTIME.joint_indices = ()
+            RUNTIME.scene_body_ids.clear()
+            RUNTIME.piece_body_ids.clear()
+            RUNTIME.piece_cells.clear()
+            RUNTIME.piece_ids_by_cell.clear()
+            RUNTIME.attachment_constraints.clear()
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -26,7 +26,8 @@ def solve_fk(
         return pyb_result
 
     # ── URDF chain FK (fallback) ──
-    return _solve_fk_urdf_chain(joint_angles, config)
+    T = _solve_fk_urdf_chain_matrix(joint_angles, config)
+    return (T[0][3], T[1][3], T[2][3])
 
 
 # 缓存的 PyBullet FK 上下文
@@ -133,11 +134,11 @@ def compute_ee_error(
 # ── URDF chain FK (matches ur5_joint_limited_robot.urdf exactly) ──
 
 
-def _solve_fk_urdf_chain(
+def _solve_fk_urdf_chain_matrix(
     joint_angles: tuple[float, ...],
     config: Config = DEFAULT_CONFIG,
-) -> tuple[float, float, float]:
-    """Compute tool0 position by walking the URDF kinematic chain directly.
+) -> list[list[float]]:
+    """Compute the full 4×4 homogeneous transform of tool0 in world frame.
 
     The chain follows `ur5_joint_limited_robot.urdf`:
       base_link → shoulder_pan(z) → shoulder_lift(y) → elbow(y)
@@ -176,7 +177,29 @@ def _solve_fk_urdf_chain(
     #   origin: xyz=(0, 0.0823, 0), rpy=(-π/2, 0, 0)
     T = _multiply_4x4(T, _fixed_joint(0.0, 0.0823, 0.0, -math.pi / 2, 0.0, 0.0))
 
+    return T
+
+
+def _solve_fk_urdf_chain(
+    joint_angles: tuple[float, ...],
+    config: Config = DEFAULT_CONFIG,
+) -> tuple[float, float, float]:
+    """Compute tool0 position by walking the URDF kinematic chain directly."""
+    T = _solve_fk_urdf_chain_matrix(joint_angles, config)
     return (T[0][3], T[1][3], T[2][3])
+
+
+def _get_tool0_z_axis(
+    joint_angles: tuple[float, ...],
+    config: Config = DEFAULT_CONFIG,
+) -> tuple[float, float, float]:
+    """Return tool0 z-axis direction in world frame (unit vector).
+
+    The tool points DOWN when z_axis ≈ (0, 0, -1).
+    """
+    T = _solve_fk_urdf_chain_matrix(joint_angles, config)
+    # Rotation matrix columns: x=T[0:3][0], y=T[0:3][1], z=T[0:3][2]
+    return (T[0][2], T[1][2], T[2][2])
 
 
 # ── internal helpers ──
