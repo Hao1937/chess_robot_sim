@@ -11,6 +11,15 @@ from src.planning.chessboard_mapping import cell_to_world
 from src.simulation._runtime import RUNTIME, clear_scene_bodies, ensure_client, p, project_root
 
 
+# 公开导出——供 main.py 在每次命令前清理上一个命令的路径可视化
+__all__ = [
+    "build_scene", "move_piece_to_cell", "move_piece_to_captured_area",
+    "apply_logical_action", "apply_logical_actions",
+    "clear_debug_visuals", "draw_waypoints", "set_human_safety_zone",
+    "build_obstacle_preset",
+]
+
+
 _INITIAL_PIECES = tuple(
     (cell, piece_id, color.value, label)
     for cell, piece_id, _kind, color, label in INITIAL_PIECE_LAYOUT
@@ -604,20 +613,30 @@ def _create_label_plate(
 
 def _create_captured_area(config: Config, client_id: int) -> int:
     x0, y0, _ = config.board_origin
+    # \u5e73\u53f0\u539a\u5ea6\uff1a\u8db3\u591f\u652f\u6491\u68cb\u5b50\uff08piece_height=0.018\uff09\uff0c\u89c6\u89c9\u4e0a\u7c7b\u4f3c\u68cb\u76d8
+    platform_thickness = 0.02
     center = (
         x0 + (config.board_cols + 1) * config.cell_size,
         y0 + (config.board_rows - 1) * config.cell_size / 2.0,
-        config.z_board + 0.001,
+        config.z_board - platform_thickness / 2.0,
     )
+    half_width = 0.035
+    half_depth = config.board_rows * config.cell_size / 2.0
+    half_height = platform_thickness / 2.0
     visual_id = p.createVisualShape(
         p.GEOM_BOX,
-        halfExtents=(0.025, config.board_rows * config.cell_size / 2.0, 0.002),
-        rgbaColor=(0.85, 0.85, 0.90, 0.75),
+        halfExtents=(half_width, half_depth, half_height),
+        rgbaColor=(0.90, 0.35, 0.18, 0.85),  # 暖橙红色，醒目区分于棋盘
+        physicsClientId=client_id,
+    )
+    collision_id = p.createCollisionShape(
+        p.GEOM_BOX,
+        halfExtents=(half_width, half_depth, half_height),
         physicsClientId=client_id,
     )
     body_id = p.createMultiBody(
         baseMass=0.0,
-        baseCollisionShapeIndex=-1,
+        baseCollisionShapeIndex=collision_id,
         baseVisualShapeIndex=visual_id,
         basePosition=center,
         physicsClientId=client_id,

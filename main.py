@@ -17,7 +17,7 @@ from src.planning.obstacle_map import build_primitive_obstacle_contexts
 from src.planning.trajectory_planner import plan_trajectory
 from src.simulation.attachment import attach_piece, detach_piece
 from src.simulation.load_robot import load_robot
-from src.simulation.scene_builder import build_scene, set_human_safety_zone
+from src.simulation.scene_builder import build_scene, clear_debug_visuals, set_human_safety_zone
 
 
 InputFunc = Callable[[str], str]
@@ -34,6 +34,9 @@ def run_command(
     human_hand_present: bool = False,
 ) -> dict[str, object]:
     """Run one command through the A/B/C/D pipeline using an existing session."""
+    # 清理上一个命令的路径可视化线条，避免累积
+    clear_debug_visuals()
+
     validation = validate_move(board, command)
     if not validation.is_legal:
         raise ValueError(validation.reason)

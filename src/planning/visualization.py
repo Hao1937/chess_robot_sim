@@ -13,15 +13,18 @@ def draw_path_debug(
     color: tuple[float, float, float] = (1.0, 0.0, 0.0),
     *,
     line_width: float = 2.5,
-    life_time: float = 8.0,
+    life_time: float = 0.0,
 ) -> None:
     """在 PyBullet 中用 addUserDebugLine 绘制路径连线。
+
+    默认 life_time=0（永不自动消失），由 clear_debug_visuals()
+    在每次新命令开始时统一清理，避免路径线条在执行过程中消失。
 
     Args:
         path_xyz: 路径点列表 (x, y, z)
         color: RGB 颜色，默认红色
         line_width: 线宽 (px)
-        life_time: 显示持续时间 (s)，超时自动消失
+        life_time: 显示持续时间 (s)，0=永久
     """
     if p is None:
         return
@@ -47,16 +50,19 @@ def draw_direct_line(
     color: tuple[float, float, float] = (0.0, 1.0, 0.0),
     *,
     line_width: float = 1.5,
-    life_time: float = 8.0,
+    life_time: float = 0.0,
 ) -> None:
-    """绘制起点→终点的直线（绿色虚线表示无障碍的最短路径）。
+    """绘制起点→终点的直线（绿色，表示无障碍的最短路径）。
+
+    默认 life_time=0（永不自动消失），由 clear_debug_visuals()
+    在每次新命令开始时统一清理。
 
     Args:
         start: 起点 (x, y, z)
         end: 终点 (x, y, z)
         color: RGB 颜色，默认绿色
         line_width: 线宽 (px)
-        life_time: 显示持续时间 (s)
+        life_time: 显示持续时间 (s)，0=永久
     """
     if p is None:
         return
