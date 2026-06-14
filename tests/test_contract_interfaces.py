@@ -20,6 +20,19 @@ def chinese_front_rook_move() -> str:
 
 
 class ContractInterfaceTests(unittest.TestCase):
+    def test_initial_board_matches_simulation_full_board_layout(self):
+        from src.interaction.board_state import create_initial_board
+        from src.simulation.scene_builder import _INITIAL_PIECES
+
+        board = create_initial_board()
+        scene_layout = {cell: (piece_id, color) for cell, piece_id, color, _label in _INITIAL_PIECES}
+
+        self.assertEqual(len(board.pieces), 32)
+        self.assertEqual(set(board.pieces), set(scene_layout))
+        self.assertEqual(len({piece.piece_id for piece in board.pieces.values()}), 32)
+        for cell, piece in board.pieces.items():
+            self.assertEqual((piece.piece_id, piece.color.value), scene_layout[cell])
+
     def test_interaction_produces_capture_actions(self):
         from src.common.types import Piece, PieceColor, PieceType
         from src.interaction.board_state import create_initial_board, make_logical_actions
@@ -140,12 +153,12 @@ class ContractInterfaceTests(unittest.TestCase):
         board = create_initial_board()
 
         self.assertEqual(board.pieces["A1"].piece_id, "red_rook_1")
-        self.assertEqual(board.pieces["B1"].piece_id, "black_horse_1")
-        self.assertEqual(board.pieces["C1"].piece_id, "red_cannon_1")
+        self.assertEqual(board.pieces["B1"].piece_id, "red_horse_1")
+        self.assertEqual(board.pieces["B3"].piece_id, "red_cannon_1")
         self.assertEqual(len({piece.piece_id for piece in board.pieces.values()}), len(board.pieces))
 
         with self.assertRaisesRegex(ValueError, "friendly"):
-            make_logical_actions(board, parse_command("A1 C1"))
+            make_logical_actions(board, parse_command("A1 B1"))
 
     def test_member_a_day_one_reset_actions_return_pieces_home(self):
         from src.common.types import Piece, PieceColor, PieceType
@@ -156,8 +169,8 @@ class ContractInterfaceTests(unittest.TestCase):
         board = BoardState(
             pieces={
                 "D4": Piece(piece_id="red_rook_1", kind=PieceType.ROOK, color=PieceColor.RED, cell="D4"),
-                "B1": Piece(piece_id="black_horse_1", kind=PieceType.HORSE, color=PieceColor.BLACK, cell="B1"),
-                "C1": Piece(piece_id="red_cannon_1", kind=PieceType.CANNON, color=PieceColor.RED, cell="C1"),
+                "B10": Piece(piece_id="black_horse_1", kind=PieceType.HORSE, color=PieceColor.BLACK, cell="B10"),
+                "B3": Piece(piece_id="red_cannon_1", kind=PieceType.CANNON, color=PieceColor.RED, cell="B3"),
             }
         )
 
@@ -232,7 +245,7 @@ class ContractInterfaceTests(unittest.TestCase):
     def test_interactive_mode_processes_multiple_commands_in_one_session(self):
         from main import run_interactive
 
-        commands = iter(["A1 B1", "obstacle_mode 2", "quit"])
+        commands = iter(["A1 A2", "obstacle_mode 2", "quit"])
         messages: list[str] = []
 
         session = run_interactive(
@@ -241,13 +254,13 @@ class ContractInterfaceTests(unittest.TestCase):
         )
 
         self.assertEqual([result["command"].command_type for result in session["results"]], ["move", "obstacle_mode"])
-        self.assertEqual(session["board"].pieces["B1"].piece_id, "red_rook_1")
+        self.assertEqual(session["board"].pieces["A2"].piece_id, "red_rook_1")
         self.assertTrue(any("interactive session ended" in message for message in messages))
 
     def test_interactive_mode_threads_hand_state_into_obstacle_map(self):
         from main import run_interactive
 
-        commands = iter(["hand_on", "A1 B1", "hand_off", "reset", "quit"])
+        commands = iter(["hand_on", "A1 A2", "hand_off", "reset", "quit"])
 
         session = run_interactive(
             input_func=lambda prompt: next(commands),

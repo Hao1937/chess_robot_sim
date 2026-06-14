@@ -76,7 +76,7 @@ def run_command(
     }
 
 
-def run_demo(command_text: str = "A1 B1") -> dict[str, object]:
+def run_demo(command_text: str = "A1 A2") -> dict[str, object]:
     """Run a mock one-shot pipeline through A/B/C/D interfaces."""
     config = DEFAULT_CONFIG
     command = parse_command(command_text)
@@ -188,7 +188,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Chinese chess robot arm simulation skeleton")
     parser.add_argument("--demo", action="store_true", help="run one mock command and exit")
     parser.add_argument("--interactive", action="store_true", help="keep the session open and poll commands")
-    parser.add_argument("--command", default="A1 B1", help="move command, for example: A1 B1")
+    parser.add_argument("--command", default="A1 A2", help="move command, for example: A1 A2")
     args = parser.parse_args()
 
     if args.interactive:

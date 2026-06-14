@@ -5,44 +5,15 @@ from pathlib import Path
 import tempfile
 
 from src.common.config import DEFAULT_CONFIG, Config
+from src.common.initial_layout import INITIAL_PIECE_LAYOUT
 from src.common.types import LogicalAction, Obstacle, OperationResult, SceneHandle
 from src.planning.chessboard_mapping import cell_to_world
 from src.simulation._runtime import RUNTIME, clear_scene_bodies, ensure_client, p, project_root
 
 
-_INITIAL_PIECES = (
-    ("A1", "red_rook_1", "red", "\u8eca"),
-    ("B1", "red_horse_1", "red", "\u99ac"),
-    ("C1", "red_elephant_1", "red", "\u76f8"),
-    ("D1", "red_advisor_1", "red", "\u4ed5"),
-    ("E1", "red_general", "red", "\u5e25"),
-    ("F1", "red_advisor_2", "red", "\u4ed5"),
-    ("G1", "red_elephant_2", "red", "\u76f8"),
-    ("H1", "red_horse_2", "red", "\u99ac"),
-    ("I1", "red_rook_2", "red", "\u8eca"),
-    ("B3", "red_cannon_1", "red", "\u70ae"),
-    ("H3", "red_cannon_2", "red", "\u70ae"),
-    ("A4", "red_soldier_1", "red", "\u5175"),
-    ("C4", "red_soldier_2", "red", "\u5175"),
-    ("E4", "red_soldier_3", "red", "\u5175"),
-    ("G4", "red_soldier_4", "red", "\u5175"),
-    ("I4", "red_soldier_5", "red", "\u5175"),
-    ("A10", "black_rook_1", "black", "\u8eca"),
-    ("B10", "black_horse_1", "black", "\u99ac"),
-    ("C10", "black_elephant_1", "black", "\u8c61"),
-    ("D10", "black_advisor_1", "black", "\u58eb"),
-    ("E10", "black_general", "black", "\u5c07"),
-    ("F10", "black_advisor_2", "black", "\u58eb"),
-    ("G10", "black_elephant_2", "black", "\u8c61"),
-    ("H10", "black_horse_2", "black", "\u99ac"),
-    ("I10", "black_rook_2", "black", "\u8eca"),
-    ("B8", "black_cannon_1", "black", "\u70ae"),
-    ("H8", "black_cannon_2", "black", "\u70ae"),
-    ("A7", "black_soldier_1", "black", "\u5352"),
-    ("C7", "black_soldier_2", "black", "\u5352"),
-    ("E7", "black_soldier_3", "black", "\u5352"),
-    ("G7", "black_soldier_4", "black", "\u5352"),
-    ("I7", "black_soldier_5", "black", "\u5352"),
+_INITIAL_PIECES = tuple(
+    (cell, piece_id, color.value, label)
+    for cell, piece_id, _kind, color, label in INITIAL_PIECE_LAYOUT
 )
 
 _BOARD_LINE_COLOR = (0.18, 0.10, 0.04)

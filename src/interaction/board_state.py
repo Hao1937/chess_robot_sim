@@ -1,15 +1,15 @@
 from __future__ import annotations
 
-from src.common.types import BoardState, LogicalAction, MoveCommand, Piece, PieceColor, PieceType
+from src.common.initial_layout import INITIAL_HOME_CELLS, INITIAL_PIECE_LAYOUT
+from src.common.types import BoardState, LogicalAction, MoveCommand, Piece, PieceColor
 
 
 def create_initial_board() -> BoardState:
-    """Create a small demo board; teammates can expand it to full Chinese chess."""
+    """Create the full initial Chinese chess board shared with the simulator."""
     return BoardState(
         pieces={
-            "A1": Piece(piece_id="red_rook_1", kind=PieceType.ROOK, color=PieceColor.RED, cell="A1"),
-            "B1": Piece(piece_id="black_horse_1", kind=PieceType.HORSE, color=PieceColor.BLACK, cell="B1"),
-            "C1": Piece(piece_id="red_cannon_1", kind=PieceType.CANNON, color=PieceColor.RED, cell="C1"),
+            cell: Piece(piece_id=piece_id, kind=kind, color=color, cell=cell)
+            for cell, piece_id, kind, color, _label in INITIAL_PIECE_LAYOUT
         }
     )
 
@@ -61,10 +61,4 @@ def _next_captured_cell(board: BoardState, color: PieceColor) -> str:
 
 
 def _home_cell_for_piece(piece: Piece) -> str:
-    if piece.kind == PieceType.ROOK and piece.color == PieceColor.RED:
-        return "A1"
-    if piece.kind == PieceType.HORSE and piece.color == PieceColor.BLACK:
-        return "B1"
-    if piece.kind == PieceType.CANNON and piece.color == PieceColor.RED:
-        return "C1"
-    return piece.cell
+    return INITIAL_HOME_CELLS.get(piece.piece_id, piece.cell)
