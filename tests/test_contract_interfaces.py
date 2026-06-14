@@ -615,22 +615,34 @@ class ContractInterfaceTests(unittest.TestCase):
                 p.stepSimulation(client_id)
 
             # ── 验证棋子跟随 EE 到达 lift 高度 ──
-            # 棋子中心 = EE 连杆原点 z - suction_cup_length - piece_height/2
-            # （吸盘尖端接触棋子顶部）
+            # 棋子顶部通过约束锚定在吸盘尖端（pad tip），
+            # 吸盘尖端 = EE 原点 + R_ee * (0,0,suction_cup_length)
+            # 棋子中心 = 吸盘尖端 - (0,0,piece_height/2)
+            from src.simulation.attachment import _transform_point
+
             ee_lift = p.getLinkState(RUNTIME.robot_id, robot.end_effector_id, physicsClientId=client_id)
             piece_lift = p.getBasePositionAndOrientation(piece_body, physicsClientId=client_id)[0]
 
-            ee_lift_z = ee_lift[0][2]
-            piece_lift_z = piece_lift[2]
-            expected_piece_z = ee_lift_z - config.suction_cup_length - config.piece_height / 2.0
-            z_error = abs(expected_piece_z - piece_lift_z)
+            pad_tip_lift = _transform_point(
+                (0.0, 0.0, config.suction_cup_length), ee_lift[0], ee_lift[1]
+            )
+            expected_piece_lift = (
+                pad_tip_lift[0],
+                pad_tip_lift[1],
+                pad_tip_lift[2] - config.piece_height / 2.0,
+            )
+            piece_error = math.hypot(
+                expected_piece_lift[0] - piece_lift[0],
+                expected_piece_lift[1] - piece_lift[1],
+                expected_piece_lift[2] - piece_lift[2],
+            )
 
-            self.assertLess(z_error, 0.02,
-                            f"棋子中心应在吸盘尖端下方: EE z={ee_lift_z:.4f}, "
-                            f"expected piece z={expected_piece_z:.4f}, "
-                            f"actual piece z={piece_lift_z:.4f}, error={z_error:.4f}m")
-            self.assertGreater(piece_lift_z, config.z_grasp + 0.03,
-                               f"棋子应在 grasp 高度之上: z={piece_lift_z:.4f}")
+            self.assertLess(piece_error, 0.025,
+                            f"棋子中心应在吸盘尖端下方: pad_tip=({pad_tip_lift[0]:.4f},{pad_tip_lift[1]:.4f},{pad_tip_lift[2]:.4f}), "
+                            f"expected piece=({expected_piece_lift[0]:.4f},{expected_piece_lift[1]:.4f},{expected_piece_lift[2]:.4f}), "
+                            f"actual piece=({piece_lift[0]:.4f},{piece_lift[1]:.4f},{piece_lift[2]:.4f}), error={piece_error:.4f}m")
+            self.assertGreater(piece_lift[2], config.z_grasp + 0.03,
+                               f"棋子应在 grasp 高度之上: z={piece_lift[2]:.4f}")
 
             # ── 验证标签盘也跟随主 body（JOINT_FIXED 约束） ──
             label_pos = p.getBasePositionAndOrientation(label_id, physicsClientId=client_id)[0]
@@ -664,24 +676,28 @@ class ContractInterfaceTests(unittest.TestCase):
                 p.stepSimulation(client_id)
 
             # ── 验证棋子跟随 EE 到达 transfer 目标 ──
-            # 由于 IK 解有轻微 FK 偏差，以 EE 实际位置为参考
+            # 棋子顶部通过约束锚定在吸盘尖端，
+            # 使用 _transform_point 考虑 EE 方向
             ee_transfer = p.getLinkState(RUNTIME.robot_id, robot.end_effector_id, physicsClientId=client_id)
             piece_transfer = p.getBasePositionAndOrientation(piece_body, physicsClientId=client_id)[0]
 
-            ee_xy = ee_transfer[0][:2]
-            piece_xy = piece_transfer[:2]
-            xy_error = math.hypot(piece_xy[0] - ee_xy[0], piece_xy[1] - ee_xy[1])
-            self.assertLess(xy_error, 0.02,
-                            f"棋子 xy 应紧贴 EE: EE=({ee_xy[0]:.4f},{ee_xy[1]:.4f}), "
-                            f"piece=({piece_xy[0]:.4f},{piece_xy[1]:.4f}), "
-                            f"error={xy_error:.4f}m")
-
-            # 棋子 z 也应接近 EE（JOINT_FIXED 约束，棋子中心在吸盘尖端下方）
-            expected_transfer_z = ee_transfer[0][2] - config.suction_cup_length - config.piece_height / 2.0
-            z_error = abs(piece_transfer[2] - expected_transfer_z)
-            self.assertLess(z_error, 0.02,
-                            f"棋子 z 应在吸盘尖端下方: EE z={ee_transfer[0][2]:.4f}, "
-                            f"piece z={piece_transfer[2]:.4f}, error={z_error:.4f}m")
+            pad_tip_transfer = _transform_point(
+                (0.0, 0.0, config.suction_cup_length), ee_transfer[0], ee_transfer[1]
+            )
+            expected_piece_transfer = (
+                pad_tip_transfer[0],
+                pad_tip_transfer[1],
+                pad_tip_transfer[2] - config.piece_height / 2.0,
+            )
+            transfer_error = math.hypot(
+                expected_piece_transfer[0] - piece_transfer[0],
+                expected_piece_transfer[1] - piece_transfer[1],
+                expected_piece_transfer[2] - piece_transfer[2],
+            )
+            self.assertLess(transfer_error, 0.025,
+                            f"棋子应跟随吸盘尖端: pad_tip=({pad_tip_transfer[0]:.4f},{pad_tip_transfer[1]:.4f},{pad_tip_transfer[2]:.4f}), "
+                            f"expected piece=({expected_piece_transfer[0]:.4f},{expected_piece_transfer[1]:.4f},{expected_piece_transfer[2]:.4f}), "
+                            f"actual piece=({piece_transfer[0]:.4f},{piece_transfer[1]:.4f},{piece_transfer[2]:.4f}), error={transfer_error:.4f}m")
 
             # ── 释放棋子 ──
             detach_result = detach_piece(piece_id=piece_id)
