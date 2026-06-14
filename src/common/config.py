@@ -21,10 +21,30 @@ class Config:
     safe_speed_scale: float = 0.35
     base_link_position: tuple[float, float, float] = (0.32, -0.25, 0.0)
     base_link_orientation_rpy: tuple[float, float, float]=(0, 0, 0)
+    human_hand_zone_col: int = 4
+    human_hand_zone_row: int = 7
+    human_hand_zone_radius: float = 0.025
+    human_hand_zone_length_cells: float = 4.0
 
     @property
     def inflated_piece_radius(self) -> float:
         return self.piece_radius + self.end_effector_radius + self.safety_margin
+
+    @property
+    def human_hand_zone_center(self) -> tuple[float, float, float]:
+        return (
+            self.board_origin[0] + self.human_hand_zone_col * self.cell_size,
+            self.board_origin[1] + self.human_hand_zone_row * self.cell_size,
+            self.z_safe,
+        )
+
+    @property
+    def human_hand_zone_length(self) -> float:
+        return self.human_hand_zone_length_cells * self.cell_size
+
+    @property
+    def human_hand_planning_radius(self) -> float:
+        return self.human_hand_zone_length / 2.0
 
 
 DEFAULT_CONFIG = Config()

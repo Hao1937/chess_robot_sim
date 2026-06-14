@@ -17,7 +17,7 @@ from src.planning.obstacle_map import assess_obstacle_intervention, build_obstac
 from src.planning.trajectory_planner import plan_trajectory
 from src.simulation.attachment import attach_piece, detach_piece
 from src.simulation.load_robot import load_robot
-from src.simulation.scene_builder import build_scene
+from src.simulation.scene_builder import build_scene, set_human_safety_zone
 
 
 InputFunc = Callable[[str], str]
@@ -119,8 +119,10 @@ def run_interactive(
 
         if command.command_type == "hand_on":
             human_hand_present = True
+            set_human_safety_zone(True, config)
         elif command.command_type == "hand_off":
             human_hand_present = False
+            set_human_safety_zone(False, config)
 
         if command.command_type == "obstacle_mode":
             scene = build_scene(config=config, obstacle_mode=command.mode)

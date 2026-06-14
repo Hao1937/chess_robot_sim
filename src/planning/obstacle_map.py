@@ -29,9 +29,9 @@ def build_obstacle_map(
         obstacles.append(
             Obstacle(
                 obstacle_id="human_hand_zone",
-                center_xyz=(config.board_origin[0] + 4 * config.cell_size, config.board_origin[1] + 4 * config.cell_size, config.z_board),
-                radius=0.08,
-                height=0.12,
+                center_xyz=config.human_hand_zone_center,
+                radius=config.human_hand_planning_radius,
+                height=config.human_hand_zone_radius * 2.0,
                 dynamic=True,
             )
         )

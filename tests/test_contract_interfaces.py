@@ -185,16 +185,12 @@ class ContractInterfaceTests(unittest.TestCase):
         from src.common.types import Obstacle
         from src.planning.obstacle_map import assess_obstacle_intervention
 
-        target_xyz = (
-            DEFAULT_CONFIG.board_origin[0] + 4 * DEFAULT_CONFIG.cell_size,
-            DEFAULT_CONFIG.board_origin[1] + 4 * DEFAULT_CONFIG.cell_size,
-            DEFAULT_CONFIG.z_board,
-        )
+        target_xyz = DEFAULT_CONFIG.human_hand_zone_center
         blocking_hand = Obstacle(
             obstacle_id="human_hand_zone",
             center_xyz=target_xyz,
-            radius=0.08,
-            height=0.12,
+            radius=DEFAULT_CONFIG.human_hand_planning_radius,
+            height=DEFAULT_CONFIG.human_hand_zone_radius * 2.0,
             dynamic=True,
         )
 
@@ -202,6 +198,29 @@ class ContractInterfaceTests(unittest.TestCase):
 
         self.assertEqual(decision.status, "pause")
         self.assertIn("blocked", decision.reason)
+
+    def test_human_hand_zone_geometry_is_shared_by_planning_and_simulation(self):
+        import math
+
+        from src.common.config import DEFAULT_CONFIG
+        from src.planning.obstacle_map import build_obstacle_map
+        from src.simulation.scene_builder import _human_safety_zone_geometry
+
+        obstacle = build_obstacle_map(
+            piece_cells=[],
+            extra_obstacles=[],
+            human_hand_present=True,
+            config=DEFAULT_CONFIG,
+        )[0]
+        center, visual_radius, visual_length, orientation_rpy = _human_safety_zone_geometry(DEFAULT_CONFIG)
+
+        self.assertEqual(center, DEFAULT_CONFIG.human_hand_zone_center)
+        self.assertEqual(obstacle.center_xyz, center)
+        self.assertEqual(visual_radius, DEFAULT_CONFIG.human_hand_zone_radius)
+        self.assertEqual(visual_length, DEFAULT_CONFIG.human_hand_zone_length)
+        self.assertEqual(obstacle.radius, DEFAULT_CONFIG.human_hand_planning_radius)
+        self.assertEqual(obstacle.height, DEFAULT_CONFIG.human_hand_zone_radius * 2.0)
+        self.assertEqual(orientation_rpy, (0.0, math.pi / 2.0, 0.0))
 
     def test_main_demo_accepts_obstacle_mode_without_piece_attachment(self):
         from main import run_demo
@@ -280,6 +299,24 @@ class ContractInterfaceTests(unittest.TestCase):
         self.assertIn("human_hand_zone", results[1].get("obstacle_ids", []))
         self.assertNotIn("human_hand_zone", results[2].get("obstacle_ids", []))
         self.assertFalse(session["human_hand_present"])
+
+    def test_interactive_mode_toggles_human_safety_zone_visual(self):
+        import main
+
+        commands = iter(["hand_on", "hand_off", "quit"])
+        visual_calls: list[bool] = []
+        original_toggle = main.set_human_safety_zone
+        try:
+            main.set_human_safety_zone = lambda hand_present, config=main.DEFAULT_CONFIG: visual_calls.append(hand_present)
+
+            main.run_interactive(
+                input_func=lambda prompt: next(commands),
+                output_func=lambda message: None,
+            )
+        finally:
+            main.set_human_safety_zone = original_toggle
+
+        self.assertEqual(visual_calls, [True, False])
 
     def test_red_chinese_notation_rook_horizontal_move(self):
         from src.common.types import BoardState, Piece, PieceColor, PieceType

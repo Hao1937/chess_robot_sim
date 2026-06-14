@@ -209,22 +209,18 @@ def set_human_safety_zone(hand_present: bool, config: Config = DEFAULT_CONFIG) -
     if not hand_present:
         return None
 
-    center = (
-        config.board_origin[0] + 4 * config.cell_size,
-        config.board_origin[1] + 4 * config.cell_size,
-        config.z_board + 0.06,
-    )
+    center, radius, length, orientation_rpy = _human_safety_zone_geometry(config)
     visual_id = p.createVisualShape(
         p.GEOM_CYLINDER,
-        radius=0.08,
-        length=0.12,
+        radius=radius,
+        length=length,
         rgbaColor=(1.0, 0.0, 0.0, 0.25),
         physicsClientId=client_id,
     )
     collision_id = p.createCollisionShape(
         p.GEOM_CYLINDER,
-        radius=0.08,
-        height=0.12,
+        radius=radius,
+        height=length,
         physicsClientId=client_id,
     )
     body_id = p.createMultiBody(
@@ -232,11 +228,24 @@ def set_human_safety_zone(hand_present: bool, config: Config = DEFAULT_CONFIG) -
         baseCollisionShapeIndex=collision_id,
         baseVisualShapeIndex=visual_id,
         basePosition=center,
+        baseOrientation=p.getQuaternionFromEuler(orientation_rpy),
         physicsClientId=client_id,
     )
     RUNTIME.human_zone_body_id = body_id
     RUNTIME.scene_body_ids.append(body_id)
     return body_id
+
+
+def _human_safety_zone_geometry(
+    config: Config = DEFAULT_CONFIG,
+) -> tuple[tuple[float, float, float], float, float, tuple[float, float, float]]:
+    """Return center, radius, length, and orientation for the horizontal hand zone."""
+    return (
+        config.human_hand_zone_center,
+        config.human_hand_zone_radius,
+        config.human_hand_zone_length,
+        (0.0, math.pi / 2.0, 0.0),
+    )
 
 
 def _create_table(config: Config, client_id: int) -> int:
