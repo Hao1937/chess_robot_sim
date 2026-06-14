@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+from typing import Callable
 
 from src.common.types import BoardState, MoveCommand
 from src.interaction.chinese_notation import parse_chinese_move

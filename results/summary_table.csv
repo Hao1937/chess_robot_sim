@@ -1,0 +1,2 @@
+success,max_joint_error,max_end_effector_error,min_obstacle_clearance,execution_time,scenario,obstacle_mode,hand_on
+True,0.0053379938696887525,0.009731,0.015,5.1,capture_A1_B1,mode_1,False

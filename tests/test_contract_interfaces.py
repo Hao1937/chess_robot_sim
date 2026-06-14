@@ -118,6 +118,55 @@ class ContractInterfaceTests(unittest.TestCase):
         self.assertGreaterEqual(len(scene.obstacles), 2)
         self.assertTrue(all(obstacle.obstacle_id.startswith("preset_column_") for obstacle in scene.obstacles))
 
+    def test_member_a_day_one_command_validation_edges(self):
+        from src.interaction.cli import parse_command
+
+        move = parse_command("a1 b1")
+        self.assertEqual(move.from_cell, "A1")
+        self.assertEqual(move.to_cell, "B1")
+        self.assertEqual(parse_command("RESET").command_type, "reset")
+        self.assertEqual(parse_command("Hand_On").command_type, "hand_on")
+        self.assertEqual(parse_command("OBSTACLE_MODE 3").mode, "mode_3")
+
+        for bad_command in ["", "A1", "A1 Z9", "foo bar", "obstacle_mode 4"]:
+            with self.subTest(command=bad_command):
+                with self.assertRaises(ValueError):
+                    parse_command(bad_command)
+
+    def test_member_a_day_one_initial_board_and_friendly_target_guard(self):
+        from src.interaction.board_state import create_initial_board, make_logical_actions
+        from src.interaction.cli import parse_command
+
+        board = create_initial_board()
+
+        self.assertEqual(board.pieces["A1"].piece_id, "red_rook_1")
+        self.assertEqual(board.pieces["B1"].piece_id, "black_horse_1")
+        self.assertEqual(board.pieces["C1"].piece_id, "red_cannon_1")
+        self.assertEqual(len({piece.piece_id for piece in board.pieces.values()}), len(board.pieces))
+
+        with self.assertRaisesRegex(ValueError, "friendly"):
+            make_logical_actions(board, parse_command("A1 C1"))
+
+    def test_member_a_day_one_reset_actions_return_pieces_home(self):
+        from src.common.types import Piece, PieceColor, PieceType
+        from src.interaction.board_state import make_logical_actions
+        from src.interaction.cli import parse_command
+        from src.common.types import BoardState
+
+        board = BoardState(
+            pieces={
+                "D4": Piece(piece_id="red_rook_1", kind=PieceType.ROOK, color=PieceColor.RED, cell="D4"),
+                "B1": Piece(piece_id="black_horse_1", kind=PieceType.HORSE, color=PieceColor.BLACK, cell="B1"),
+                "C1": Piece(piece_id="red_cannon_1", kind=PieceType.CANNON, color=PieceColor.RED, cell="C1"),
+            }
+        )
+
+        actions = make_logical_actions(board, parse_command("reset"))
+
+        self.assertEqual([action.action_type for action in actions], ["pick", "place"])
+        self.assertEqual(actions[0].cell, "D4")
+        self.assertEqual(actions[1].cell, "A1")
+
     def test_human_hand_obstacle_can_pause_when_target_blocked(self):
         from src.common.config import DEFAULT_CONFIG
         from src.common.types import Obstacle
