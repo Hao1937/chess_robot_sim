@@ -2,13 +2,15 @@ from __future__ import annotations
 
 from src.common.config import DEFAULT_CONFIG, Config
 from src.common.types import JointTrajectory, MotionPrimitive, Obstacle, PrimitivePlanningContext
-from src.planning.collision_checker import direct_path_clear
-from src.planning.ik_solver import solve_ik
-from src.planning.path_search import a_star_2d
+from src.planning.collision_checker import direct_path_clear, check_segment_collision_multi_z
+from src.planning.ik_solver import is_reachable, solve_ik
+from src.planning.path_search import a_star_2d, a_star_theta_2d
 from src.planning.trajectory_smoother import (
     interpolate_waypoints_cartesian,
+    optimize_jerk_minimum,
     shortcut_smoothing,
     smooth_joint_trajectory,
+    smooth_joint_trajectory_cubic_spline,
 )
 from src.planning.visualization import draw_direct_line, draw_path_debug
 
@@ -21,12 +23,19 @@ def plan_trajectory(
     enable_path_search: bool = True,
     enable_smoothing: bool = True,
     enable_interpolation: bool = True,
+    enable_theta_star: bool = False,
+    enable_cubic_spline: bool = False,
+    enable_jerk_opt: bool = False,
 ) -> JointTrajectory:
     """规划关节轨迹。
 
     对水平移动 (approach/transfer) 可启用路径搜索绕障，
     对垂直移动保持现有 IK 逐点求解。
-    新增 enable_* 参数控制各功能的开关，方便测试和渐进式集成。
+    enable_* 参数控制各功能的开关，方便测试和渐进式集成。
+
+    Processing order:
+      A*/Theta* → shortcut → interpolation → IK →
+      cubic spline (replaces moving average) → jerk opt
 
     Args:
         primitives_or_contexts: MotionPrimitive 或 PrimitivePlanningContext 列表
@@ -35,6 +44,9 @@ def plan_trajectory(
         enable_path_search: 是否启用 A* 路径搜索绕障
         enable_smoothing: 是否启用 shortcut + joint 平滑
         enable_interpolation: 是否启用 waypoint 插值
+        enable_theta_star: 是否用 Theta* 替代 A*（P5a，默认关闭，实验性功能）
+        enable_cubic_spline: 是否用 cubic spline 替代移动平均（P5b，默认关闭，实验性功能）
+        enable_jerk_opt: 是否启用 jerk-minimization 优化（P5c，默认关闭，实验性功能，已知 BUG：会产生天文数字关节值）
 
     Returns:
         JointTrajectory(joint_waypoints, speed_profile)
@@ -58,6 +70,7 @@ def plan_trajectory(
                 primitive, primitive_obstacles, config,
                 cartesian_waypoints, speed_profile,
                 enable_path_search, enable_smoothing, enable_interpolation,
+                enable_theta_star,
             )
         else:
             _plan_vertical_segment(
@@ -75,18 +88,38 @@ def plan_trajectory(
     speed_profile = speed_profile[:len(cartesian_waypoints)]
 
     # ── IK 转换（链式：前一个解作为下一个的种子，确保解分支连续）──
+    # 同时对每个 waypoint 做可达性预检
     joint_waypoints: list[tuple[float, ...]] = []
     seed = config.home_pose[:6]
+    unreachable_count = 0
     for wp in cartesian_waypoints:
+        if not is_reachable(wp, config):
+            unreachable_count += 1
         jw = solve_ik(wp, config, seed=seed)
         joint_waypoints.append(jw)
         seed = jw
+    if unreachable_count > 0:
+        import warnings
+        warnings.warn(
+            f"{unreachable_count}/{len(cartesian_waypoints)} waypoints "
+            f"outside reachable workspace (0.25–0.90m from base)"
+        )
 
     # ── 关节空间平滑 ──
     # 链式 IK 种子的使用使得邻近 waypoint 的关节配置连续，
     # 平滑不再产生物理无意义的混合。
+    #
+    # 处理顺序：cubic spline (替代移动平均) → jerk opt
     if enable_smoothing and len(joint_waypoints) >= 3:
-        joint_waypoints = smooth_joint_trajectory(joint_waypoints)
+        if enable_cubic_spline:
+            joint_waypoints = smooth_joint_trajectory_cubic_spline(joint_waypoints)
+        else:
+            joint_waypoints = smooth_joint_trajectory(joint_waypoints)
+
+    if enable_jerk_opt and len(joint_waypoints) >= 4:
+        joint_waypoints = optimize_jerk_minimum(
+            joint_waypoints, speed_profile[:len(joint_waypoints)],
+        )
 
     return JointTrajectory(
         joint_waypoints=joint_waypoints,
@@ -107,10 +140,12 @@ def _plan_horizontal_segment(
     enable_path_search: bool,
     enable_smoothing: bool,
     enable_interpolation: bool,
+    enable_theta_star: bool = False,
 ) -> None:
     """规划水平移动段 (approach/transfer) 的路径。
 
     如果直线路径被阻挡且 enable_path_search=True，使用 A* 绕行；
+    当 enable_theta_star=True 时使用 Theta* 替代 A*（任意角度路径）；
     否则直接走直线（可插值）。
     """
     end_xyz = primitive.target_xyz
@@ -123,7 +158,7 @@ def _plan_horizontal_segment(
     need_detour = (
         enable_path_search
         and prev is not None
-        and not direct_path_clear(
+        and not check_segment_collision_multi_z(
             start_xy, end_xy, z_plane, primitive_obstacles,
             step_size=config.path_collision_check_step,
             safety_margin=config.safety_margin,
@@ -137,7 +172,9 @@ def _plan_horizontal_segment(
             (end_xy[0], end_xy[1], z_plane),
         )
 
-        search_result = a_star_2d(
+        # Choose search algorithm: Theta* or A*
+        search_func = a_star_theta_2d if enable_theta_star else a_star_2d
+        search_result = search_func(
             start_xy, end_xy,
             obstacles=primitive_obstacles,
             z_plane=z_plane,

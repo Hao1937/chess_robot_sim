@@ -94,6 +94,38 @@ def direct_path_clear(
     return result.collision_free
 
 
+def check_segment_collision_multi_z(
+    start_xy: tuple[float, float],
+    end_xy: tuple[float, float],
+    z_plane: float,
+    obstacles: list[Obstacle],
+    step_size: float = 0.005,
+    safety_margin: float = 0.0,
+) -> bool:
+    """在多个高度层检测水平线段是否无障碍。
+
+    对 z_plane, z_plane-0.05, z_plane-0.10 三个高度分别检测，
+    只要任一层碰撞即判定为不可通行。这为机械臂中间连杆
+    （肘部、前臂）提供了额外的安全余量。
+
+    Args:
+        start_xy: 起点 (x, y)
+        end_xy: 终点 (x, y)
+        z_plane: 主检测平面高度 (m)
+        obstacles: 障碍物列表
+        step_size: 检测步长 (m)
+        safety_margin: 额外安全膨胀距离 (m)
+
+    Returns:
+        True 如果所有高度层均无障碍（整条线段可通行）
+    """
+    z_levels = [z_plane, z_plane - 0.05, z_plane - 0.10]
+    for z in z_levels:
+        if not direct_path_clear(start_xy, end_xy, z, obstacles, step_size, safety_margin):
+            return False
+    return True
+
+
 # ── 内部辅助函数 ──
 
 

@@ -19,6 +19,30 @@ def chinese_front_rook_move() -> str:
     return chr(0x524d) + chinese_rook_move()
 
 
+def chinese_rook_retreat() -> str:
+    return chr(0x8f66) + chr(0x4e8c) + chr(0x9000) + chr(0x4e00)
+
+
+def chinese_cannon_retreat() -> str:
+    return chr(0x70ae) + chr(0x4e94) + chr(0x9000) + chr(0x4e8c)
+
+
+def chinese_black_rook_horizontal() -> str:
+    return chr(0x8eca) + chr(0x4e00) + chr(0x5e73) + chr(0x4e5d)
+
+
+def chinese_black_cannon_advance() -> str:
+    return chr(0x7832) + chr(0x4e94) + chr(0x9032) + chr(0x56db)
+
+
+def chinese_black_front_rook() -> str:
+    return chr(0x524d) + chr(0x8eca) + chr(0x4e8c) + chr(0x5e73) + chr(0x4e03)
+
+
+def chinese_horse_advance() -> str:
+    return chr(0x9a6c) + chr(0x4e8c) + chr(0x8fdb) + chr(0x4e09)
+
+
 class ContractInterfaceTests(unittest.TestCase):
     def test_initial_board_matches_simulation_full_board_layout(self):
         from src.interaction.board_state import create_initial_board
@@ -330,6 +354,7 @@ class ContractInterfaceTests(unittest.TestCase):
         session = run_interactive(
             input_func=lambda prompt: next(commands),
             output_func=messages.append,
+            enable_board_gui=False,
         )
 
         self.assertEqual([result["command"].command_type for result in session["results"]], ["move", "obstacle_mode"])
@@ -344,6 +369,7 @@ class ContractInterfaceTests(unittest.TestCase):
         session = run_interactive(
             input_func=lambda prompt: next(commands),
             output_func=lambda message: None,
+            enable_board_gui=False,
         )
         results = session["results"]
 
@@ -372,6 +398,7 @@ class ContractInterfaceTests(unittest.TestCase):
             main.run_interactive(
                 input_func=lambda prompt: next(commands),
                 output_func=lambda message: None,
+                enable_board_gui=False,
             )
         finally:
             main.set_human_safety_zone = original_toggle
@@ -427,6 +454,167 @@ class ContractInterfaceTests(unittest.TestCase):
         self.assertEqual(command.from_cell, "B4")
         self.assertEqual(command.to_cell, "G4")
 
+    def test_red_chinese_notation_rook_retreat(self):
+        from src.common.types import BoardState, Piece, PieceColor, PieceType
+        from src.interaction.chinese_notation import parse_chinese_move
+
+        board = BoardState(
+            pieces={
+                "B3": Piece(piece_id="red_rook_2", kind=PieceType.ROOK, color=PieceColor.RED, cell="B3"),
+            }
+        )
+
+        command = parse_chinese_move(chinese_rook_retreat(), board)
+
+        self.assertEqual(command.command_type, "move")
+        self.assertEqual(command.from_cell, "B3")
+        self.assertEqual(command.to_cell, "B2")
+
+    def test_red_chinese_notation_cannon_retreat(self):
+        from src.common.types import BoardState, Piece, PieceColor, PieceType
+        from src.interaction.chinese_notation import parse_chinese_move
+
+        board = BoardState(
+            pieces={
+                "E4": Piece(piece_id="red_cannon_5", kind=PieceType.CANNON, color=PieceColor.RED, cell="E4"),
+            }
+        )
+
+        command = parse_chinese_move(chinese_cannon_retreat(), board)
+
+        self.assertEqual(command.from_cell, "E4")
+        self.assertEqual(command.to_cell, "E2")
+
+    def test_black_chinese_notation_rook_horizontal(self):
+        from src.common.types import BoardState, Piece, PieceColor, PieceType
+        from src.interaction.chinese_notation import parse_chinese_move
+
+        board = BoardState(
+            pieces={
+                "I5": Piece(piece_id="black_rook_1", kind=PieceType.ROOK, color=PieceColor.BLACK, cell="I5"),
+            }
+        )
+
+        command = parse_chinese_move(chinese_black_rook_horizontal(), board, side="black")
+
+        self.assertEqual(command.command_type, "move")
+        self.assertEqual(command.from_cell, "I5")
+        self.assertEqual(command.to_cell, "A5")
+
+    def test_black_chinese_notation_cannon_advance(self):
+        from src.common.types import BoardState, Piece, PieceColor, PieceType
+        from src.interaction.chinese_notation import parse_chinese_move
+
+        board = BoardState(
+            pieces={
+                "E5": Piece(piece_id="black_cannon_5", kind=PieceType.CANNON, color=PieceColor.BLACK, cell="E5"),
+            }
+        )
+
+        command = parse_chinese_move(chinese_black_cannon_advance(), board, side="black")
+
+        self.assertEqual(command.from_cell, "E5")
+        self.assertEqual(command.to_cell, "E1")
+
+    def test_black_chinese_notation_front_rook_disambiguation(self):
+        from src.common.types import BoardState, Piece, PieceColor, PieceType
+        from src.interaction.chinese_notation import parse_chinese_move
+
+        board = BoardState(
+            pieces={
+                "H3": Piece(piece_id="black_rook_front", kind=PieceType.ROOK, color=PieceColor.BLACK, cell="H3"),
+                "H6": Piece(piece_id="black_rook_back", kind=PieceType.ROOK, color=PieceColor.BLACK, cell="H6"),
+            }
+        )
+
+        command = parse_chinese_move(chinese_black_front_rook(), board, side="black")
+
+        # Black: 前 = lower row (closer to red side) = H3; 七 = col 2 (C)
+        self.assertEqual(command.from_cell, "H3")
+        self.assertEqual(command.to_cell, "C3")
+
+    def test_red_chinese_notation_horse_advance(self):
+        from src.common.types import BoardState, Piece, PieceColor, PieceType
+        from src.interaction.chinese_notation import parse_chinese_move
+
+        board = BoardState(
+            pieces={
+                "B1": Piece(piece_id="red_horse_2", kind=PieceType.HORSE, color=PieceColor.RED, cell="B1"),
+            }
+        )
+
+        command = parse_chinese_move(chinese_horse_advance(), board)
+
+        self.assertEqual(command.from_cell, "B1")
+        self.assertEqual(command.to_cell, "B4")
+
+    # ── Bug 修复验证测试 ──
+
+    def test_execute_trajectory_only_initializes_joints_once(self):
+        """Bug 1: 多次 execute_trajectory 调用不应重复初始化关节（teleport）。
+
+        验证 _init_joint_state 仅在首次调用时执行，后续调用跳过，
+        避免每次轨迹段都 teleport 到起点。
+        """
+        from unittest.mock import patch, MagicMock
+        from src.common.types import JointTrajectory
+        from src.control.controller import execute_trajectory, reset_initialization
+
+        trajectory = JointTrajectory(
+            joint_waypoints=[(0.0, 0.0, 0.0, 0.0, 0.0, 0.0)],
+            speed_profile=["fast"],
+        )
+
+        mock_ctx = MagicMock()
+        mock_ctx.robot_id = 1
+        mock_ctx.client_id = 0
+        mock_ctx.joint_indices = (0, 1, 2, 3, 4, 5)
+
+        with patch("src.control.controller._get_pybullet_context", return_value=mock_ctx):
+            with patch("src.control.controller._init_joint_state") as mock_init:
+                with patch("src.control.controller._execute_pybullet_step",
+                           return_value=((0.0, 0.0, 0.0, 0.0, 0.0, 0.0), 0.1)):
+                    # 首次调用 — 应初始化
+                    execute_trajectory(trajectory)
+                    self.assertEqual(mock_init.call_count, 1,
+                                     "首次 execute_trajectory 应调用 _init_joint_state")
+
+                    # 第二次调用 — 不应初始化
+                    execute_trajectory(trajectory)
+                    self.assertEqual(mock_init.call_count, 1,
+                                     "第二次 execute_trajectory 不应再次调用 _init_joint_state")
+
+                    # 重置后调用 — 应再次初始化
+                    reset_initialization()
+                    execute_trajectory(trajectory)
+                    self.assertEqual(mock_init.call_count, 2,
+                                     "reset_initialization 后应再次调用 _init_joint_state")
+
+    def test_ik_solver_yields_downward_orientation_at_e1(self):
+        """Bug 2: E1 位置的 IK 解应使 tool0 z 轴接近竖直向下。
+
+        E1 (col=4, row=0) 位于机械臂正前方较近处，之前仅位置 IK
+        回退导致 EE 未保持竖直姿态。修复后应通过零空间优化
+        使 -zz > 0.9。
+        """
+        import math
+
+        from src.common.config import DEFAULT_CONFIG
+        from src.planning.chessboard_mapping import cell_to_world
+        from src.planning.ik_solver import solve_ik
+        from src.control.fk_solver import _get_tool0_z_axis
+
+        e1_xyz = cell_to_world("E1", DEFAULT_CONFIG)
+        solution = solve_ik(e1_xyz, DEFAULT_CONFIG)
+
+        self.assertEqual(len(solution), 6,
+                         "IK 解应包含 6 个关节角")
+        self.assertTrue(all(math.isfinite(t) for t in solution),
+                        "所有关节角应为有限值")
+
+        _, _, zz = _get_tool0_z_axis(solution, DEFAULT_CONFIG)
+        self.assertGreater(-zz, 0.9,
+                           f"tool0 z 轴应接近竖直向下，当前 -zz={-zz:.4f}（需 > 0.9）")
 
     # ── PyBullet 实物仿真测试 ──
 
@@ -744,6 +932,745 @@ class ContractInterfaceTests(unittest.TestCase):
             RUNTIME.piece_ids_by_cell.clear()
             RUNTIME.attachment_constraints.clear()
             RUNTIME.manually_attached_pieces.clear()
+
+
+    # ── P1: Chess piece movement rule tests ──
+
+    def test_general_legal_moves_within_palace(self):
+        """帅/将：九宫内合法的一步直行"""
+        from src.common.types import BoardState, Piece, PieceColor, PieceType
+        from src.interaction.chess_rules import validate_move
+        from src.interaction.cli import parse_command
+
+        # Each call to validate_move is independent; board is not mutated.
+        # Place the piece at the from_cell for each test.
+        board = BoardState(pieces={
+            "E1": Piece(piece_id="red_general", kind=PieceType.GENERAL, color=PieceColor.RED, cell="E1"),
+            "E10": Piece(piece_id="black_general", kind=PieceType.GENERAL, color=PieceColor.BLACK, cell="E10"),
+        })
+
+        # Red general from E1 (col=4, row=0): forward, left, right
+        self.assertTrue(validate_move(board, parse_command("E1 E2")).is_legal, "forward one step")
+        self.assertTrue(validate_move(board, parse_command("E1 D1")).is_legal, "left one step")
+        self.assertTrue(validate_move(board, parse_command("E1 F1")).is_legal, "right one step")
+
+        # Red general from E2 (row=1): forward, left, right
+        board2 = BoardState(pieces={
+            "E2": Piece(piece_id="red_general", kind=PieceType.GENERAL, color=PieceColor.RED, cell="E2"),
+        })
+        self.assertTrue(validate_move(board2, parse_command("E2 E3")).is_legal, "forward from E2")
+        self.assertTrue(validate_move(board2, parse_command("E2 D2")).is_legal, "left from E2")
+        self.assertTrue(validate_move(board2, parse_command("E2 F2")).is_legal, "right from E2")
+
+        # Black general: one step within palace
+        self.assertTrue(validate_move(board, parse_command("E10 E9")).is_legal, "black forward one step")
+        self.assertTrue(validate_move(board, parse_command("E10 D10")).is_legal, "black left one step")
+
+    def test_general_illegal_move_outside_palace(self):
+        """帅/将：禁止出九宫"""
+        from src.common.types import BoardState, Piece, PieceColor, PieceType
+        from src.interaction.chess_rules import validate_move
+        from src.interaction.cli import parse_command
+
+        board = BoardState(pieces={
+            "D3": Piece(piece_id="red_general", kind=PieceType.GENERAL, color=PieceColor.RED, cell="D3"),
+            "D8": Piece(piece_id="black_general", kind=PieceType.GENERAL, color=PieceColor.BLACK, cell="D8"),
+        })
+
+        # Red: D3(row=2) → D4(row=3) leaves palace (max red row is 2)
+        self.assertFalse(validate_move(board, parse_command("D3 D4")).is_legal, "outside palace (row)")
+        # Red: D3(col=3) → C3(col=2) leaves palace (min palace col is 3)
+        self.assertFalse(validate_move(board, parse_command("D3 C3")).is_legal, "outside palace (col)")
+        # Black: D8(row=7) → D7(row=6) leaves palace (min black row is 7)
+        self.assertFalse(validate_move(board, parse_command("D8 D7")).is_legal, "black outside palace")
+
+    def test_general_must_move_one_step_orthogonal(self):
+        """帅/将：禁止斜行和超过一步"""
+        from src.common.types import BoardState, Piece, PieceColor, PieceType
+        from src.interaction.chess_rules import validate_move
+        from src.interaction.cli import parse_command
+
+        board = BoardState(pieces={
+            "E1": Piece(piece_id="red_general", kind=PieceType.GENERAL, color=PieceColor.RED, cell="E1"),
+        })
+
+        # Diagonal is illegal
+        self.assertFalse(validate_move(board, parse_command("E1 D2")).is_legal, "diagonal illegal")
+        # Two steps is illegal
+        self.assertFalse(validate_move(board, parse_command("E1 E3")).is_legal, "two steps illegal")
+
+    def test_advisor_legal_diagonal_within_palace(self):
+        """仕/士：九宫内的合法斜行"""
+        from src.common.types import BoardState, Piece, PieceColor, PieceType
+        from src.interaction.chess_rules import validate_move
+        from src.interaction.cli import parse_command
+
+        # validate_move does not mutate board state, so each test uses its own board.
+        board1 = BoardState(pieces={
+            "D1": Piece(piece_id="red_advisor_1", kind=PieceType.ADVISOR, color=PieceColor.RED, cell="D1"),
+        })
+        board2 = BoardState(pieces={
+            "E2": Piece(piece_id="red_advisor_1", kind=PieceType.ADVISOR, color=PieceColor.RED, cell="E2"),
+        })
+        board3 = BoardState(pieces={
+            "F10": Piece(piece_id="black_advisor_2", kind=PieceType.ADVISOR, color=PieceColor.BLACK, cell="F10"),
+        })
+
+        # Red advisor: D1 → E2 (diagonal, within palace)
+        self.assertTrue(validate_move(board1, parse_command("D1 E2")).is_legal)
+        # Move back: E2 → D1
+        self.assertTrue(validate_move(board2, parse_command("E2 D1")).is_legal)
+        # Black advisor: F10 → E9 (diagonal, within palace)
+        self.assertTrue(validate_move(board3, parse_command("F10 E9")).is_legal)
+
+    def test_advisor_illegal_straight_move(self):
+        """仕/士：禁止直行"""
+        from src.common.types import BoardState, Piece, PieceColor, PieceType
+        from src.interaction.chess_rules import validate_move
+        from src.interaction.cli import parse_command
+
+        board = BoardState(pieces={
+            "D1": Piece(piece_id="red_advisor_1", kind=PieceType.ADVISOR, color=PieceColor.RED, cell="D1"),
+        })
+
+        self.assertFalse(validate_move(board, parse_command("D1 D2")).is_legal, "straight move illegal")
+        self.assertFalse(validate_move(board, parse_command("D1 E1")).is_legal, "straight move illegal")
+
+    def test_advisor_illegal_outside_palace(self):
+        """仕/士：禁止出九宫"""
+        from src.common.types import BoardState, Piece, PieceColor, PieceType
+        from src.interaction.chess_rules import validate_move
+        from src.interaction.cli import parse_command
+
+        board = BoardState(pieces={
+            "F1": Piece(piece_id="red_advisor_2", kind=PieceType.ADVISOR, color=PieceColor.RED, cell="F1"),
+            "D10": Piece(piece_id="black_advisor_1", kind=PieceType.ADVISOR, color=PieceColor.BLACK, cell="D10"),
+        })
+
+        # Red advisor at F1, diagonal to G2 is outside palace (col 6)
+        self.assertFalse(validate_move(board, parse_command("F1 G2")).is_legal, "outside palace col")
+        # Black advisor at D10, diagonal to C9 is outside palace (col 2)
+        self.assertFalse(validate_move(board, parse_command("D10 C9")).is_legal, "outside palace col")
+
+    def test_elephant_legal_field_move(self):
+        """相/象：合法的田字对角移动"""
+        from src.common.types import BoardState, Piece, PieceColor, PieceType
+        from src.interaction.chess_rules import validate_move
+        from src.interaction.cli import parse_command
+
+        board = BoardState(pieces={
+            "C1": Piece(piece_id="red_elephant_1", kind=PieceType.ELEPHANT, color=PieceColor.RED, cell="C1"),
+            "G1": Piece(piece_id="red_elephant_2", kind=PieceType.ELEPHANT, color=PieceColor.RED, cell="G1"),
+            "C10": Piece(piece_id="black_elephant_1", kind=PieceType.ELEPHANT, color=PieceColor.BLACK, cell="C10"),
+        })
+
+        # Red elephant: C1 → A3 (田字)
+        self.assertTrue(validate_move(board, parse_command("C1 A3")).is_legal)
+        # Red elephant: C1 → E3 (田字)
+        self.assertTrue(validate_move(board, parse_command("C1 E3")).is_legal)
+        # Black elephant: C10 → A8 (田字)
+        self.assertTrue(validate_move(board, parse_command("C10 A8")).is_legal)
+        # Black elephant: C10 → E8 (田字)
+        self.assertTrue(validate_move(board, parse_command("C10 E8")).is_legal)
+
+    def test_elephant_eye_blocked(self):
+        """相/象：塞象眼时不能走"""
+        from src.common.types import BoardState, Piece, PieceColor, PieceType
+        from src.interaction.chess_rules import validate_move
+        from src.interaction.cli import parse_command
+
+        board = BoardState(pieces={
+            "C1": Piece(piece_id="red_elephant_1", kind=PieceType.ELEPHANT, color=PieceColor.RED, cell="C1"),
+            # Block the elephant eye at B2 (midpoint between C1 and A3)
+            "B2": Piece(piece_id="blocker", kind=PieceType.SOLDIER, color=PieceColor.RED, cell="B2"),
+        })
+
+        self.assertFalse(validate_move(board, parse_command("C1 A3")).is_legal, "eye blocked at B2")
+
+    def test_elephant_cannot_cross_river(self):
+        """相/象：禁止过河"""
+        from src.common.types import BoardState, Piece, PieceColor, PieceType
+        from src.interaction.chess_rules import validate_move
+        from src.interaction.cli import parse_command
+
+        # Red elephant must stay in rows 0-4; black in rows 5-9
+        board = BoardState(pieces={
+            "C4": Piece(piece_id="red_elephant_1", kind=PieceType.ELEPHANT, color=PieceColor.RED, cell="C4"),
+            "C5": Piece(piece_id="black_elephant_1", kind=PieceType.ELEPHANT, color=PieceColor.BLACK, cell="C5"),
+        })
+
+        # Red C4(row=3) → E6(row=5): crosses river (row 5 >= 5)
+        self.assertFalse(validate_move(board, parse_command("C4 E6")).is_legal, "red crosses to row 5")
+        # Black C5(row=4) → A3(row=2): crosses river (row 2 <= 4)
+        self.assertFalse(validate_move(board, parse_command("C5 A3")).is_legal, "black crosses to row 2")
+
+    def test_soldier_forward_before_crossing_river(self):
+        """兵/卒：未过河只能前进"""
+        from src.common.types import BoardState, Piece, PieceColor, PieceType
+        from src.interaction.chess_rules import validate_move
+        from src.interaction.cli import parse_command
+
+        board = BoardState(pieces={
+            "A4": Piece(piece_id="red_soldier_1", kind=PieceType.SOLDIER, color=PieceColor.RED, cell="A4"),
+            "A7": Piece(piece_id="black_soldier_1", kind=PieceType.SOLDIER, color=PieceColor.BLACK, cell="A7"),
+        })
+
+        # Red soldier: forward A4 → A5 is legal
+        self.assertTrue(validate_move(board, parse_command("A4 A5")).is_legal, "forward before river")
+        # Black soldier: forward A7 → A6 is legal
+        self.assertTrue(validate_move(board, parse_command("A7 A6")).is_legal, "black forward before river")
+
+    def test_soldier_cannot_retreat(self):
+        """兵/卒：禁止后退"""
+        from src.common.types import BoardState, Piece, PieceColor, PieceType
+        from src.interaction.chess_rules import validate_move
+        from src.interaction.cli import parse_command
+
+        board = BoardState(pieces={
+            "A5": Piece(piece_id="red_soldier_1", kind=PieceType.SOLDIER, color=PieceColor.RED, cell="A5"),
+            "A6": Piece(piece_id="black_soldier_1", kind=PieceType.SOLDIER, color=PieceColor.BLACK, cell="A6"),
+        })
+
+        # Red soldier cannot retreat (A5 → A4)
+        self.assertFalse(validate_move(board, parse_command("A5 A4")).is_legal, "red cannot retreat")
+        # Black soldier cannot retreat (A6 → A7)
+        self.assertFalse(validate_move(board, parse_command("A6 A7")).is_legal, "black cannot retreat")
+
+    def test_soldier_cannot_move_sideways_before_river(self):
+        """兵/卒：未过河禁止左右移动"""
+        from src.common.types import BoardState, Piece, PieceColor, PieceType
+        from src.interaction.chess_rules import validate_move
+        from src.interaction.cli import parse_command
+
+        board = BoardState(pieces={
+            "A4": Piece(piece_id="red_soldier_1", kind=PieceType.SOLDIER, color=PieceColor.RED, cell="A4"),
+            "C7": Piece(piece_id="black_soldier_2", kind=PieceType.SOLDIER, color=PieceColor.BLACK, cell="C7"),
+        })
+
+        self.assertFalse(validate_move(board, parse_command("A4 B4")).is_legal, "red sideways before river")
+        self.assertFalse(validate_move(board, parse_command("C7 B7")).is_legal, "black sideways before river")
+
+    def test_soldier_sideways_and_forward_after_crossing_river(self):
+        """兵/卒：过河后可左右移动和继续前进"""
+        from src.common.types import BoardState, Piece, PieceColor, PieceType
+        from src.interaction.chess_rules import validate_move
+        from src.interaction.cli import parse_command
+
+        # Red soldier at C6 (row=5): crossed river (row >= 5)
+        # Black soldier at C3 (row=2): crossed river (row <= 4)
+        board = BoardState(pieces={
+            "C6": Piece(piece_id="red_soldier_2", kind=PieceType.SOLDIER, color=PieceColor.RED, cell="C6"),
+            "C3": Piece(piece_id="black_soldier_2", kind=PieceType.SOLDIER, color=PieceColor.BLACK, cell="C3"),
+        })
+
+        # Red soldier (crossed): can move left, right, forward
+        self.assertTrue(validate_move(board, parse_command("C6 B6")).is_legal, "red left after crossing")
+        self.assertTrue(validate_move(board, parse_command("C6 D6")).is_legal, "red right after crossing")
+        self.assertTrue(validate_move(board, parse_command("C6 C7")).is_legal, "red forward after crossing")
+        # Red soldier still cannot retreat
+        self.assertFalse(validate_move(board, parse_command("C6 C5")).is_legal, "red cannot retreat after crossing")
+
+        # Black soldier (crossed): can move left, right, forward
+        self.assertTrue(validate_move(board, parse_command("C3 B3")).is_legal, "black left after crossing")
+        self.assertTrue(validate_move(board, parse_command("C3 D3")).is_legal, "black right after crossing")
+        self.assertTrue(validate_move(board, parse_command("C3 C2")).is_legal, "black forward after crossing")
+
+    # ── P5a/P5b/P5c: trajectory optimisation upgrades ──
+
+    def test_theta_star_produces_straight_line_without_obstacles(self):
+        """P5a: Theta* produces a near-straight path when no obstacles are present."""
+        import math
+        from src.common.config import DEFAULT_CONFIG
+        from src.planning.path_search import a_star_theta_2d
+
+        start = (0.5, 0.5)
+        end = (0.5, 1.5)
+        z_plane = 0.18
+        result = a_star_theta_2d(
+            start, end, obstacles=[], z_plane=z_plane,
+            grid_resolution=0.02, timeout_ms=500.0, config=DEFAULT_CONFIG,
+        )
+        self.assertTrue(result.success, "Theta* should succeed on empty map")
+        self.assertGreater(len(result.path_xy), 1, "should produce at least 2 waypoints")
+        direct_dist = math.hypot(end[0] - start[0], end[1] - start[1])
+        path_length = sum(
+            math.hypot(
+                result.path_xy[i + 1][0] - result.path_xy[i][0],
+                result.path_xy[i + 1][1] - result.path_xy[i][1],
+            )
+            for i in range(len(result.path_xy) - 1)
+        )
+        self.assertLess(
+            path_length / direct_dist, 1.10,
+            f"Theta* path length ({path_length:.3f}) should be close to direct ({direct_dist:.3f})",
+        )
+
+    def test_cubic_spline_output_count(self):
+        """P5b: Cubic spline output count is a requested multiple of input count."""
+        from src.planning.trajectory_smoother import smooth_joint_trajectory_cubic_spline
+
+        waypoints = [
+            (0.0, 0.1, 0.2, -0.3, 0.4, 0.5),
+            (0.1, 0.2, 0.3, -0.4, 0.5, 0.6),
+            (0.2, 0.3, 0.4, -0.5, 0.6, 0.7),
+            (0.3, 0.4, 0.5, -0.6, 0.7, 0.8),
+            (0.4, 0.5, 0.6, -0.7, 0.8, 0.9),
+        ]
+        num_samples = len(waypoints) * 2
+        smoothed = smooth_joint_trajectory_cubic_spline(waypoints, num_samples=num_samples)
+        self.assertEqual(len(smoothed), num_samples)
+        self.assertEqual(len(smoothed[0]), 6)
+        default_smoothed = smooth_joint_trajectory_cubic_spline(waypoints)
+        self.assertEqual(len(default_smoothed), len(waypoints))
+        for j in range(6):
+            self.assertAlmostEqual(smoothed[0][j], waypoints[0][j], delta=1e-9)
+            self.assertAlmostEqual(smoothed[-1][j], waypoints[-1][j], delta=1e-9)
+        short = [(1.0, 2.0, 3.0, 4.0, 5.0, 6.0)]
+        self.assertEqual(smooth_joint_trajectory_cubic_spline(short, num_samples=10), short)
+
+    def test_jerk_opt_preserves_endpoints(self):
+        """P5c: Jerk optimisation keeps first and last waypoint unchanged."""
+        import math
+        from src.planning.trajectory_smoother import optimize_jerk_minimum
+
+        waypoints = [
+            (0.0, 0.1, 0.2, -0.3, 0.4, 0.5),
+            (0.1, 0.2, 0.3, -0.4, 0.5, 0.6),
+            (0.2, 0.3, 0.4, -0.5, 0.6, 0.7),
+            (0.3, 0.4, 0.5, -0.6, 0.7, 0.8),
+            (0.4, 0.5, 0.6, -0.7, 0.8, 0.9),
+        ]
+        speed_profile = ["safe"] * len(waypoints)
+        optimized = optimize_jerk_minimum(waypoints, speed_profile, num_iterations=50, learning_rate=0.01)
+        self.assertEqual(len(optimized), len(waypoints))
+        for j in range(6):
+            self.assertAlmostEqual(optimized[0][j], waypoints[0][j], delta=1e-9)
+            self.assertAlmostEqual(optimized[-1][j], waypoints[-1][j], delta=1e-9)
+        for wp in optimized:
+            for val in wp:
+                self.assertTrue(math.isfinite(val))
+        short = [(1.0, 2.0, 3.0, 4.0, 5.0, 6.0)]
+        self.assertEqual(optimize_jerk_minimum(short, ["safe"]), short)
+
+    def test_plan_trajectory_accepts_new_enable_parameters(self):
+        """Backward-compat: plan_trajectory with new enable_* params defaults to old behaviour."""
+        from src.common.config import DEFAULT_CONFIG
+        from src.common.types import LogicalAction
+        from src.planning.motion_primitives import build_motion_primitives
+        from src.planning.obstacle_map import build_obstacle_map
+        from src.planning.trajectory_planner import plan_trajectory
+
+        actions = [
+            LogicalAction(action_type="pick", cell="A1"),
+            LogicalAction(action_type="place", cell="B1"),
+        ]
+        obstacles = build_obstacle_map(piece_cells=["C1"], extra_obstacles=[])
+        primitives = build_motion_primitives(actions, DEFAULT_CONFIG)
+        traj_default = plan_trajectory(primitives, obstacles, DEFAULT_CONFIG)
+        self.assertGreater(len(traj_default.joint_waypoints), 0)
+        traj_off = plan_trajectory(
+            primitives, obstacles, DEFAULT_CONFIG,
+            enable_theta_star=False, enable_cubic_spline=False, enable_jerk_opt=False,
+        )
+        self.assertEqual(len(traj_off.joint_waypoints), len(traj_default.joint_waypoints))
+        traj_spline = plan_trajectory(
+            primitives, obstacles, DEFAULT_CONFIG, enable_cubic_spline=True,
+        )
+        self.assertGreater(len(traj_spline.joint_waypoints), 0)
+        self.assertEqual(len(traj_spline.joint_waypoints), len(traj_spline.speed_profile))
+        traj_jerk = plan_trajectory(
+            primitives, obstacles, DEFAULT_CONFIG, enable_jerk_opt=True,
+        )
+        self.assertGreater(len(traj_jerk.joint_waypoints), 0)
+        self.assertEqual(len(traj_jerk.joint_waypoints), len(traj_jerk.speed_profile))
+
+
+    # ── P2: Matplotlib Board GUI tests ──
+
+    def test_board_gui_cell_to_grid_conversion(self):
+        """BoardGUI helper: _cell_to_grid / _grid_to_cell round-trip correctly."""
+        from src.interaction.board_gui import _cell_to_grid, _grid_to_cell
+
+        # Valid cells
+        self.assertEqual(_cell_to_grid("A1"), (0, 0))
+        self.assertEqual(_cell_to_grid("I10"), (8, 9))
+        self.assertEqual(_cell_to_grid("E5"), (4, 4))
+        self.assertEqual(_cell_to_grid("a1"), (0, 0))  # lowercase
+        self.assertEqual(_cell_to_grid("B3"), (1, 2))
+
+        # Round-trip
+        for cell in ("A1", "B3", "C5", "I10", "E5"):
+            col, row = _cell_to_grid(cell)
+            self.assertIsNotNone(col)
+            self.assertIsNotNone(row)
+            result = _grid_to_cell(col, row)
+            self.assertEqual(result, cell)
+
+        # Invalid / out-of-bounds
+        self.assertEqual(_cell_to_grid(""), (None, None))
+        self.assertEqual(_cell_to_grid("Z9"), (None, None))
+        self.assertEqual(_cell_to_grid("J1"), (None, None))
+        self.assertEqual(_cell_to_grid("A11"), (None, None))
+        self.assertEqual(_cell_to_grid("A0"), (None, None))
+
+    def test_board_gui_grid_to_cell_format(self):
+        """BoardGUI helper: _grid_to_cell produces correct format."""
+        from src.interaction.board_gui import _grid_to_cell
+
+        self.assertEqual(_grid_to_cell(0, 0), "A1")
+        self.assertEqual(_grid_to_cell(8, 9), "I10")
+        self.assertEqual(_grid_to_cell(4, 4), "E5")
+        self.assertEqual(_grid_to_cell(3, 7), "D8")
+
+    def test_board_gui_piece_chars_mapping(self):
+        """PIECE_CHARS covers all piece type/color combinations."""
+        from src.common.types import PieceColor, PieceType
+        from src.interaction.board_gui import PIECE_CHARS
+
+        self.assertEqual(len(PIECE_CHARS), 14)  # 7 piece types x 2 colors
+        self.assertEqual(PIECE_CHARS[(PieceColor.RED, PieceType.ROOK)], chr(0x8f66))
+        self.assertEqual(PIECE_CHARS[(PieceColor.BLACK, PieceType.ROOK)], chr(0x8eca))
+        self.assertEqual(PIECE_CHARS[(PieceColor.RED, PieceType.GENERAL)], chr(0x5e25))
+        self.assertEqual(PIECE_CHARS[(PieceColor.BLACK, PieceType.GENERAL)], chr(0x5c07))
+        self.assertEqual(PIECE_CHARS[(PieceColor.RED, PieceType.SOLDIER)], chr(0x5175))
+        self.assertEqual(PIECE_CHARS[(PieceColor.BLACK, PieceType.SOLDIER)], chr(0x5352))
+
+    def test_board_gui_exports_piece_chars(self):
+        """PIECE_CHARS is importable from board_gui module."""
+        from src.interaction.board_gui import PIECE_CHARS, BoardGUI
+        self.assertIsInstance(PIECE_CHARS, dict)
+        self.assertTrue(callable(BoardGUI))
+
+    def test_board_gui_graceful_import_error_without_matplotlib(self):
+        """BoardGUI._ensure_matplotlib raises ImportError when matplotlib missing."""
+        import sys, builtins
+        from src.interaction.board_state import create_initial_board
+
+        create_initial_board()
+
+        saved = sys.modules.get('matplotlib')
+        saved_pyplot = sys.modules.get('matplotlib.pyplot')
+        try:
+            sys.modules['matplotlib'] = None
+            sys.modules['matplotlib.pyplot'] = None
+            from src.interaction.board_gui import BoardGUI as BG
+            _orig = builtins.__import__
+            def _block(name, *a, **kw):
+                if name == 'matplotlib' or name.startswith('matplotlib.'):
+                    raise ImportError("Mocked")
+                return _orig(name, *a, **kw)
+            builtins.__import__ = _block
+            try:
+                with self.assertRaises(ImportError):
+                    BG._ensure_matplotlib()
+            finally:
+                builtins.__import__ = _orig
+        finally:
+            if saved is None:
+                sys.modules.pop('matplotlib', None)
+            else:
+                sys.modules['matplotlib'] = saved
+            if saved_pyplot is None:
+                sys.modules.pop('matplotlib.pyplot', None)
+            else:
+                sys.modules['matplotlib.pyplot'] = saved_pyplot
+
+    def test_board_gui_creates_move_command_from_two_clicks(self):
+        """Simulate two cell clicks produce a valid MoveCommand."""
+        from unittest.mock import MagicMock
+        from src.interaction.board_state import create_initial_board
+
+        board = create_initial_board()
+        mock_plt = MagicMock()
+
+        mock_fig = MagicMock()
+        mock_ax = MagicMock()
+        mock_fig.canvas.mpl_connect = MagicMock(return_value=1)
+        mock_fig.canvas.mpl_disconnect = MagicMock()
+        mock_fig.canvas.manager.set_window_title = MagicMock()
+
+        import queue
+        from src.interaction.board_gui import BoardGUI
+        gui = BoardGUI.__new__(BoardGUI)
+        gui._plt = mock_plt
+        gui._Rectangle = MagicMock()
+        gui._command_queue = queue.Queue()
+        gui._selected_cell = None
+        gui._highlight_rect = None
+        gui._hover_rect = None
+        gui._board = board
+        gui._window_open = True
+        gui._cid_click = 1
+        gui._cid_motion = 2
+        gui._cid_close = 3
+        gui._fig = mock_fig
+        gui._ax = mock_ax
+        gui._last_draw_time = 0.0
+        gui._draw(board)
+
+        # First click: select source A1
+        ev1 = MagicMock()
+        ev1.xdata = 0.0
+        ev1.ydata = 0.0
+        gui._on_click(ev1)
+        self.assertEqual(gui._selected_cell, "A1")
+
+        # Second click: select target A2
+        ev2 = MagicMock()
+        ev2.xdata = 0.0
+        ev2.ydata = 1.0
+        gui._on_click(ev2)
+
+        cmd = gui.get_next_command()
+        self.assertIsNotNone(cmd)
+        self.assertEqual(cmd.command_type, "move")
+        self.assertEqual(cmd.from_cell, "A1")
+        self.assertEqual(cmd.to_cell, "A2")
+        self.assertIsNone(gui._selected_cell)
+
+    def test_board_gui_same_cell_click_deselects(self):
+        """Clicking the same cell twice deselects without enqueuing."""
+        from unittest.mock import MagicMock
+        from src.interaction.board_state import create_initial_board
+
+        board = create_initial_board()
+        mock_plt = MagicMock()
+
+        mock_fig = MagicMock()
+        mock_ax = MagicMock()
+        mock_fig.canvas.mpl_connect = MagicMock(return_value=1)
+        mock_fig.canvas.mpl_disconnect = MagicMock()
+        mock_fig.canvas.manager.set_window_title = MagicMock()
+
+        import queue
+        from src.interaction.board_gui import BoardGUI
+        gui = BoardGUI.__new__(BoardGUI)
+        gui._plt = mock_plt
+        gui._Rectangle = MagicMock()
+        gui._command_queue = queue.Queue()
+        gui._selected_cell = None
+        gui._highlight_rect = None
+        gui._hover_rect = None
+        gui._board = board
+        gui._window_open = True
+        gui._cid_click = 1
+        gui._cid_motion = 2
+        gui._cid_close = 3
+        gui._fig = mock_fig
+        gui._ax = mock_ax
+        gui._last_draw_time = 0.0
+        gui._draw(board)
+
+        click = MagicMock()
+        click.xdata = 2.0
+        click.ydata = 3.0
+        gui._on_click(click)
+        self.assertEqual(gui._selected_cell, "C4")
+
+        gui._on_click(click)  # same cell deselects
+        self.assertIsNone(gui._selected_cell)
+        self.assertIsNone(gui.get_next_command())
+
+    def test_board_gui_click_outside_board_ignored(self):
+        """Clicks outside the board grid do not produce selections or commands."""
+        from unittest.mock import MagicMock
+        from src.interaction.board_state import create_initial_board
+
+        board = create_initial_board()
+        mock_plt = MagicMock()
+
+        mock_fig = MagicMock()
+        mock_ax = MagicMock()
+        mock_fig.canvas.mpl_connect = MagicMock(return_value=1)
+        mock_fig.canvas.mpl_disconnect = MagicMock()
+        mock_fig.canvas.manager.set_window_title = MagicMock()
+
+        import queue
+        from src.interaction.board_gui import BoardGUI
+        gui = BoardGUI.__new__(BoardGUI)
+        gui._plt = mock_plt
+        gui._Rectangle = MagicMock()
+        gui._command_queue = queue.Queue()
+        gui._selected_cell = None
+        gui._highlight_rect = None
+        gui._hover_rect = None
+        gui._board = board
+        gui._window_open = True
+        gui._cid_click = 1
+        gui._cid_motion = 2
+        gui._cid_close = 3
+        gui._fig = mock_fig
+        gui._ax = mock_ax
+        gui._last_draw_time = 0.0
+        gui._draw(board)
+
+        for x, y in [(-1.0, -1.0), (9.5, 10.5)]:
+            ev = MagicMock()
+            ev.xdata = x
+            ev.ydata = y
+            gui._on_click(ev)
+            self.assertIsNone(gui._selected_cell)
+
+        self.assertIsNone(gui.get_next_command())
+
+    def test_board_gui_update_board_redraws(self):
+        """update_board() clears old state and redraws."""
+        from unittest.mock import MagicMock
+        from src.interaction.board_state import create_initial_board
+
+        board = create_initial_board()
+        mock_plt = MagicMock()
+
+        mock_fig = MagicMock()
+        mock_ax = MagicMock()
+        mock_fig.canvas.mpl_connect = MagicMock(return_value=1)
+        mock_fig.canvas.mpl_disconnect = MagicMock()
+        mock_fig.canvas.manager.set_window_title = MagicMock()
+        mock_fig.canvas.draw_idle = MagicMock()
+
+        import queue
+        from src.interaction.board_gui import BoardGUI
+        gui = BoardGUI.__new__(BoardGUI)
+        gui._plt = mock_plt
+        gui._Rectangle = MagicMock()
+        gui._command_queue = queue.Queue()
+        gui._selected_cell = "A1"
+        gui._highlight_rect = MagicMock()
+        gui._hover_rect = None
+        gui._board = board
+        gui._window_open = True
+        gui._cid_click = 1
+        gui._cid_motion = 2
+        gui._cid_close = 3
+        gui._fig = mock_fig
+        gui._ax = mock_ax
+        gui._last_draw_time = 0.0
+        gui._draw(board)
+
+        gui.update_board(board)
+        self.assertIsNone(gui._selected_cell)
+        self.assertIsNone(gui._highlight_rect)
+        mock_ax.clear.assert_called()
+
+    def test_board_gui_close_cleanup(self):
+        """close() disconnects events and closes the figure."""
+        from unittest.mock import MagicMock
+        from src.interaction.board_state import create_initial_board
+
+        board = create_initial_board()
+        mock_plt = MagicMock()
+
+        mock_fig = MagicMock()
+        mock_ax = MagicMock()
+        mock_fig.canvas.mpl_connect = MagicMock(return_value=1)
+        mock_fig.canvas.mpl_disconnect = MagicMock()
+        mock_fig.canvas.manager.set_window_title = MagicMock()
+
+        import queue
+        from src.interaction.board_gui import BoardGUI
+        gui = BoardGUI.__new__(BoardGUI)
+        gui._plt = mock_plt
+        gui._Rectangle = MagicMock()
+        gui._command_queue = queue.Queue()
+        gui._selected_cell = None
+        gui._highlight_rect = None
+        gui._hover_rect = None
+        gui._board = board
+        gui._window_open = True
+        gui._cid_click = 1
+        gui._cid_motion = 2
+        gui._cid_close = 3
+        gui._fig = mock_fig
+        gui._ax = mock_ax
+        gui._last_draw_time = 0.0
+
+        gui.close()
+        self.assertFalse(gui._window_open)
+        self.assertIsNone(gui._cid_click)
+        self.assertIsNone(gui._cid_close)
+        mock_plt.close.assert_called_once_with(mock_fig)
+
+    def test_gui_create_board_gui_integration(self):
+        """gui.create_board_gui() creates and registers a BoardGUI."""
+        from unittest.mock import MagicMock
+        from src.interaction.board_state import create_initial_board
+
+        board = create_initial_board()
+        mock_plt = MagicMock()
+
+        mock_fig = MagicMock()
+        mock_ax = MagicMock()
+        mock_fig.canvas.mpl_connect = MagicMock(return_value=1)
+        mock_fig.canvas.mpl_disconnect = MagicMock()
+        mock_fig.canvas.manager.set_window_title = MagicMock()
+        mock_fig.canvas.draw_idle = MagicMock()
+
+        import queue
+        from src.interaction.board_gui import BoardGUI
+
+        # Build a mock BoardGUI via __new__ (avoids opening real window)
+        gui = BoardGUI.__new__(BoardGUI)
+        gui._plt = mock_plt
+        gui._Rectangle = MagicMock()
+        gui._command_queue = queue.Queue()
+        gui._selected_cell = None
+        gui._highlight_rect = None
+        gui._hover_rect = None
+        gui._board = board
+        gui._window_open = True
+        gui._cid_click = 1
+        gui._cid_motion = 2
+        gui._cid_close = 3
+        gui._fig = mock_fig
+        gui._ax = mock_ax
+        gui._last_draw_time = 0.0
+        gui._draw(board)
+
+        # Register it via gui module
+        import src.interaction.gui as gui_module
+        saved = gui_module._active_board_gui
+        gui_module._active_board_gui = gui
+        try:
+            from src.interaction.gui import get_active_board_gui, poll_gui_command
+
+            self.assertIsNotNone(gui)
+            self.assertIs(get_active_board_gui(), gui)
+            self.assertTrue(gui.is_open)
+
+            c1 = MagicMock()
+            c1.xdata = 0.0
+            c1.ydata = 0.0
+            gui._on_click(c1)
+
+            c2 = MagicMock()
+            c2.xdata = 0.0
+            c2.ydata = 1.0
+            gui._on_click(c2)
+
+            cmd = poll_gui_command(board, input_func=lambda p: "quit")
+            self.assertIsNotNone(cmd)
+            self.assertEqual(cmd.command_type, "move")
+            self.assertEqual(cmd.from_cell, "A1")
+            self.assertEqual(cmd.to_cell, "A2")
+        finally:
+            gui_module._active_board_gui = saved
+
+    def test_gui_poll_command_falls_back_to_text_when_no_board_active(self):
+        """poll_gui_command uses text input when no BoardGUI is active."""
+        from src.interaction.board_state import create_initial_board
+        from src.interaction.gui import poll_gui_command
+        import src.interaction.gui as gui_module
+
+        board = create_initial_board()
+
+        saved = gui_module._active_board_gui
+        gui_module._active_board_gui = None
+        try:
+            cmd = poll_gui_command(board, input_func=lambda p: "A1 A2")
+            self.assertIsNotNone(cmd)
+            self.assertEqual(cmd.from_cell, "A1")
+        finally:
+            gui_module._active_board_gui = saved
 
 
 if __name__ == "__main__":

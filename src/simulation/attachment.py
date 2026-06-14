@@ -1,4 +1,5 @@
 from __future__ import annotations
+import math
 
 from src.common.config import DEFAULT_CONFIG, Config
 from src.common.types import OperationResult
@@ -72,6 +73,17 @@ def attach_piece(
     # ── 计算棋子目标位置 —— 吸盘尖端下方 piece_height/2 ──
     ee_pos = ee_state[0]
     ee_orn = ee_state[1]
+
+    # ── 前置条件检查：EE 必须在棋子正上方（xy 距离 < 0.03m）──
+    piece_current_pos = p.getBasePositionAndOrientation(body_id, physicsClientId=client_id)[0]
+    ee_to_piece_xy = math.hypot(ee_pos[0] - piece_current_pos[0], ee_pos[1] - piece_current_pos[1])
+    if ee_to_piece_xy > 0.03:
+        return OperationResult(
+            False,
+            f"EE too far from piece {piece_id}: xy_distance={ee_to_piece_xy:.4f}m "
+            f"(max 0.03m). EE may not have reached the piece position."
+        )
+
     pad_tip_world = _transform_point(
         (0.0, 0.0, config.suction_cup_length), ee_pos, ee_orn
     )

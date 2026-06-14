@@ -104,7 +104,13 @@ def _solve_ik_pybullet(
     # 工具姿态：绕 x 轴转 -π/2，使 tool0 的 z 轴指向世界 -z（竖直向下）
     # tool0 本地 z 轴 = wrist_3 的 y 轴 = (0, 1, 0)（由固定关节 rpy=(-π/2,0,0) 决定）
     # Rx(-π/2) · (0, 1, 0) = (0, 0, -1) ✓
-    target_orn = p.getQuaternionFromEuler((-math.pi / 2, 0.0, 0.0))
+    # 提供多个绕 z 轴旋转的朝向变体，增强末端可达区域（如 E1）的 IK 成功率
+    orn_variants = [
+        p.getQuaternionFromEuler((-math.pi / 2, 0.0, 0.0)),       # 默认：竖直向下
+        p.getQuaternionFromEuler((-math.pi / 2, 0.0, math.pi / 4)),  # +45° 绕 z
+        p.getQuaternionFromEuler((-math.pi / 2, 0.0, -math.pi / 4)), # -45° 绕 z
+        p.getQuaternionFromEuler((-math.pi / 2, 0.0, math.pi / 2)),  # +90° 绕 z
+    ]
 
     # restPoses 使用 seed（如果提供）或 home_pose
     rest_poses = list(seed) if seed is not None else list(config.home_pose[:6])
@@ -118,34 +124,41 @@ def _solve_ik_pybullet(
     ]
 
     for solver, use_orn, rest_poses, damping in strategies:
-        try:
-            kwargs = {
-                "lowerLimits": [-math.pi] * 6,
-                "upperLimits": [math.pi] * 6,
-                "jointRanges": [2.0 * math.pi] * 6,
-                "restPoses": rest_poses,
-                "physicsClientId": client_id,
-            }
-            if solver is not None:
-                kwargs["solver"] = solver
-            if damping is not None:
-                kwargs["jointDamping"] = [damping] * 6
+        # 朝向约束 solver：遍历多个朝向变体
+        # 仅位置 solver：只试一次
+        target_orns = orn_variants if use_orn else [None]
+        for target_orn in target_orns:
+            try:
+                kwargs = {
+                    "lowerLimits": [-math.pi] * 6,
+                    "upperLimits": [math.pi] * 6,
+                    "jointRanges": [2.0 * math.pi] * 6,
+                    "restPoses": rest_poses,
+                    "physicsClientId": client_id,
+                }
+                if solver is not None:
+                    kwargs["solver"] = solver
+                if damping is not None:
+                    kwargs["jointDamping"] = [damping] * 6
 
-            if use_orn:
-                kwargs["targetOrientation"] = target_orn
+                if use_orn:
+                    kwargs["targetOrientation"] = target_orn
 
-            joint_angles = p.calculateInverseKinematics(
-                robot_id, ee_idx, target_pos, **kwargs
-            )
+                joint_angles = p.calculateInverseKinematics(
+                    robot_id, ee_idx, target_pos, **kwargs
+                )
 
-            if len(joint_angles) >= 6:
-                result = tuple(round(_wrap_to_pi(joint_angles[i]), 4) for i in range(6))
-                # 验证解的正确性：使用 PyBullet FK 反算 EE 位置
-                if _validate_ik_solution_pybullet(ctx, result, target_xyz, config, tolerance=0.01):
-                    return result
-                # 验证未通过，继续尝试下一个策略
-        except Exception:
-            continue
+                if len(joint_angles) >= 6:
+                    result = tuple(round(_wrap_to_pi(joint_angles[i]), 4) for i in range(6))
+                    # 验证解的正确性：使用 PyBullet FK 反算 EE 位置
+                    if _validate_ik_solution_pybullet(ctx, result, target_xyz, config, tolerance=0.01):
+                        # 仅位置 IK：应用零空间朝向优化，使 tool0 z 轴尽量竖直向下
+                        if not use_orn:
+                            result = _nullspace_optimize_orientation(result, target_xyz, config)
+                        return result
+                    # 验证未通过，继续尝试下一个策略
+            except Exception:
+                continue
 
     # 所有 PyBullet 策略都失败，回退到数值 IK
     return None
@@ -278,6 +291,12 @@ def _solve_ik_numerical(
         result = _nullspace_optimize_orientation(tuple(best_theta), target_xyz, config)
         return result
 
+    # IK 未收敛：返回 seed（前一个 waypoint 的解）而非 home_pose，
+    # 确保关节轨迹连续，避免大幅跳变导致机械臂旋转扫飞棋子。
+    # seed 指向的空间位置虽不精确，但相邻 waypoint 之间误差很小（~3cm），
+    # 在关节空间中连续跟踪不会产生剧烈运动。
+    if seed is not None:
+        return tuple(seed)
     return config.home_pose[:6]
 
 
@@ -585,11 +604,11 @@ def _nullspace_optimize_orientation(
 
     theta = list(joint_angles)
 
-    for outer in range(10):
+    for outer in range(20):
         # Orientation steps (5 at a time)
         for _ in range(5):
             _, _, zz = _get_tool0_z_axis(tuple(theta), config)
-            if -zz > 0.92:
+            if -zz > 0.96:
                 break
             J = _compute_jacobian(tuple(theta), config)
             g_orient = _orientation_gradient(tuple(theta), config)
@@ -615,7 +634,7 @@ def _nullspace_optimize_orientation(
         _, _, zz = _get_tool0_z_axis(tuple(theta), config)
         current = _solve_fk_urdf_chain(tuple(theta), config)
         pos_err = math.sqrt(sum((current[i] - target_xyz[i])**2 for i in range(3)))
-        if -zz > 0.85 and pos_err < 0.004:
+        if -zz > 0.92 and pos_err < 0.004:
             break
 
     return tuple(round(_wrap_to_pi(t), 4) for t in theta)

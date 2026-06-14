@@ -6,12 +6,12 @@ from typing import Callable
 
 from src.common.config import DEFAULT_CONFIG, Config
 from src.common.types import BoardState, ExecutionResult, JointTrajectory, LogicalAction, MoveCommand, PieceColor, RobotHandle, SceneHandle
-from src.control.controller import execute_trajectory
+from src.control.controller import execute_trajectory, reset_initialization, set_simulation_pump_callback
 from src.control.logger import summarize_execution
 from src.interaction.board_state import create_initial_board, make_logical_actions
 from src.interaction.chess_rules import validate_move
 from src.interaction.cli import parse_command
-from src.interaction.gui import poll_gui_command
+from src.interaction.gui import create_board_gui, poll_gui_command
 from src.planning.motion_primitives import build_motion_primitives, get_action_primitive_ranges
 from src.planning.obstacle_map import build_primitive_obstacle_contexts
 from src.planning.trajectory_planner import plan_trajectory
@@ -34,6 +34,11 @@ def run_command(
     human_hand_present: bool = False,
 ) -> dict[str, object]:
     """Run one command through the A/B/C/D pipeline using an existing session."""
+    # 重置关节初始化标志，确保本命令的第一个 trajectory 段
+    # 会将机械臂 teleport 到正确的起始位姿。这避免因上一命令
+    # 结束时关节位姿与当前 IK 解分支不同而导致 PD 控制器剧烈追踪。
+    reset_initialization()
+
     # 清理上一个命令的路径可视化线条，避免累积
     clear_debug_visuals()
 
@@ -190,11 +195,30 @@ def run_demo(command_text: str = "A1 A2") -> dict[str, object]:
     )
 
 
+class _NoOpBoardGUI:
+    """A no-op BoardGUI proxy used when GUI is disabled (e.g. tests)."""
+    is_open: bool = True
+
+    def get_next_command(self) -> MoveCommand | None:
+        return None
+
+    def update_board(self, board: BoardState) -> None:
+        pass
+
+    def set_status(self, text: str) -> None:
+        pass
+
+    def close(self) -> None:
+        pass
+
+
 def run_interactive(
     input_func: InputFunc = input,
     output_func: OutputFunc = print,
     config: Config = DEFAULT_CONFIG,
     max_steps: int | None = None,
+    *,
+    enable_board_gui: bool = True,
 ) -> dict[str, object]:
     """Keep robot, scene, and board alive while polling commands continuously."""
     board = create_initial_board()
@@ -203,6 +227,22 @@ def run_interactive(
     results: list[dict[str, object]] = []
     human_hand_present = False
     steps = 0
+
+    # 启动可点击棋盘 GUI 窗口（可通过参数或环境变量禁用）
+    import os
+    _enable_gui = enable_board_gui and os.environ.get("CHESS_ROBOT_BOARD_GUI", "1") != "0"
+    if _enable_gui:
+        board_gui = create_board_gui(board)
+        # 设置仿真期间的 GUI 事件泵送回调，防止窗口冻结
+        def _pump_gui() -> None:
+            try:
+                if board_gui.is_open:
+                    board_gui._plt.pause(0.001)
+            except Exception:
+                pass
+        set_simulation_pump_callback(_pump_gui)
+    else:
+        board_gui = _NoOpBoardGUI()
 
     output_func("interactive session started; enter moves, obstacle_mode N, reset, hand_on/off, or quit")
     while True:
@@ -223,6 +263,14 @@ def run_interactive(
         if command.command_type == "obstacle_mode":
             scene = build_scene(config=config, obstacle_mode=command.mode)
 
+        # 在执行仿真前显示状态提示，并立即刷新到屏幕
+        if board_gui.is_open:
+            board_gui.set_status("机械臂移动中...")
+            try:
+                board_gui._plt.pause(0.001)
+            except Exception:
+                pass
+
         try:
             result = run_command(
                 command,
@@ -233,16 +281,33 @@ def run_interactive(
                 human_hand_present=human_hand_present,
             )
         except ValueError as exc:
+            if board_gui.is_open:
+                board_gui.set_status("")
             output_func(f"error: {exc}")
             continue
 
+        # 清除状态提示
+        if board_gui.is_open:
+            board_gui.set_status("")
+
         results.append(result)
         output_func(f"ok: {command.command_type}")
+
+        # 更新棋盘 GUI 显示
+        if board_gui.is_open:
+            board_gui.update_board(board)
+        else:
+            # 用户关闭了棋盘窗口，退出交互
+            output_func("board window closed; interactive session ended")
+            break
+
         steps += 1
         if max_steps is not None and steps >= max_steps:
             output_func("interactive session ended")
             break
 
+    board_gui.close()
+    set_simulation_pump_callback(None)  # 清除回调，避免后续非交互调用误触发
     return {
         "board": board,
         "scene": scene,
