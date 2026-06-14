@@ -7,6 +7,7 @@ from src.common.config import DEFAULT_CONFIG, Config
 from src.common.types import ExecutionResult, JointTrajectory
 from src.control.fk_solver import solve_fk
 from src.simulation._runtime import RUNTIME, p
+from src.simulation.attachment import sync_manual_attachments
 
 # Reproducible noise seed so demos look stable across runs
 _RANDOM = random.Random(42)
@@ -188,6 +189,7 @@ def _init_joint_state(ctx: _PyBulletContext, waypoint: tuple[float, ...]) -> Non
     # 充分步进让物理稳定（480 步 ≈ 2 秒 @240Hz）
     for _ in range(480):
         p.stepSimulation(ctx.client_id)
+        sync_manual_attachments(ctx.client_id)
 
 
 def _get_pybullet_context() -> _PyBulletContext | None:
@@ -246,6 +248,7 @@ def _execute_pybullet_step(
     sim_steps = 40 if mode == "fast" else 80
     for _ in range(sim_steps):
         p.stepSimulation(ctx.client_id)
+        sync_manual_attachments(ctx.client_id)
     sim_time = sim_steps * (1.0 / 240)
 
     # Read back actual joint positions

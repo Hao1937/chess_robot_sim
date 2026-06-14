@@ -455,6 +455,7 @@ class ContractInterfaceTests(unittest.TestCase):
         from src.common.config import DEFAULT_CONFIG
         from src.planning.chessboard_mapping import cell_to_world
         from src.simulation._runtime import RUNTIME, clear_scene_bodies, ensure_client, p
+        from src.simulation.attachment import sync_manual_attachments
 
         # ── 隔离：断开可能由其他测试残留的 PyBullet 连接 ──
         if RUNTIME.client_id is not None:
@@ -471,6 +472,7 @@ class ContractInterfaceTests(unittest.TestCase):
         RUNTIME.piece_cells.clear()
         RUNTIME.piece_ids_by_cell.clear()
         RUNTIME.attachment_constraints.clear()
+        RUNTIME.manually_attached_pieces.clear()
 
         client_id = ensure_client()
         self.assertIsNotNone(client_id, "无法创建 PyBullet 客户端")
@@ -569,6 +571,7 @@ class ContractInterfaceTests(unittest.TestCase):
                                   physicsClientId=client_id)
             for _ in range(480):
                 p.stepSimulation(client_id)
+                sync_manual_attachments(client_id)
 
             ee_state = p.getLinkState(RUNTIME.robot_id, robot.end_effector_id, physicsClientId=client_id)
             ee_z_before = ee_state[0][2]
@@ -576,7 +579,7 @@ class ContractInterfaceTests(unittest.TestCase):
                             f"EE 应接近 grasp 高度，实际 z={ee_z_before:.4f}")
 
             # ── 吸附棋子 ──
-            from src.simulation.attachment import attach_piece, detach_piece, _get_all_piece_body_ids
+            from src.simulation.attachment import attach_piece, detach_piece, _get_all_piece_body_ids, sync_manual_attachments
 
             result = attach_piece(piece_id=piece_id, end_effector_id=robot.end_effector_id)
             self.assertTrue(result.success, f"attach 失败: {result.message}")
@@ -613,6 +616,7 @@ class ContractInterfaceTests(unittest.TestCase):
             # 步进仿真让约束拉动棋子（更多步数确保标签盘约束充分沉降）
             for _ in range(480):
                 p.stepSimulation(client_id)
+                sync_manual_attachments(client_id)
 
             # ── 验证棋子跟随 EE 到达 lift 高度 ──
             # 棋子顶部通过约束锚定在吸盘尖端（pad tip），
@@ -637,7 +641,7 @@ class ContractInterfaceTests(unittest.TestCase):
                 expected_piece_lift[2] - piece_lift[2],
             )
 
-            self.assertLess(piece_error, 0.025,
+            self.assertLess(piece_error, 0.005,
                             f"棋子中心应在吸盘尖端下方: pad_tip=({pad_tip_lift[0]:.4f},{pad_tip_lift[1]:.4f},{pad_tip_lift[2]:.4f}), "
                             f"expected piece=({expected_piece_lift[0]:.4f},{expected_piece_lift[1]:.4f},{expected_piece_lift[2]:.4f}), "
                             f"actual piece=({piece_lift[0]:.4f},{piece_lift[1]:.4f},{piece_lift[2]:.4f}), error={piece_error:.4f}m")
@@ -674,6 +678,7 @@ class ContractInterfaceTests(unittest.TestCase):
                 )
             for _ in range(480):
                 p.stepSimulation(client_id)
+                sync_manual_attachments(client_id)
 
             # ── 验证棋子跟随 EE 到达 transfer 目标 ──
             # 棋子顶部通过约束锚定在吸盘尖端，
@@ -694,7 +699,7 @@ class ContractInterfaceTests(unittest.TestCase):
                 expected_piece_transfer[1] - piece_transfer[1],
                 expected_piece_transfer[2] - piece_transfer[2],
             )
-            self.assertLess(transfer_error, 0.025,
+            self.assertLess(transfer_error, 0.005,
                             f"棋子应跟随吸盘尖端: pad_tip=({pad_tip_transfer[0]:.4f},{pad_tip_transfer[1]:.4f},{pad_tip_transfer[2]:.4f}), "
                             f"expected piece=({expected_piece_transfer[0]:.4f},{expected_piece_transfer[1]:.4f},{expected_piece_transfer[2]:.4f}), "
                             f"actual piece=({piece_transfer[0]:.4f},{piece_transfer[1]:.4f},{piece_transfer[2]:.4f}), error={transfer_error:.4f}m")
@@ -703,7 +708,10 @@ class ContractInterfaceTests(unittest.TestCase):
             detach_result = detach_piece(piece_id=piece_id)
             self.assertTrue(detach_result.success, f"detach 失败: {detach_result.message}")
 
-            # 约束应已移除
+            # 手动吸附映射应已清除
+            self.assertNotIn(piece_id, RUNTIME.manually_attached_pieces,
+                             "手动吸附映射应已清除")
+            # 旧版约束也应已清除（兼容）
             self.assertNotIn(piece_id, RUNTIME.attachment_constraints,
                              "piece 吸附约束应已移除")
 
@@ -735,6 +743,7 @@ class ContractInterfaceTests(unittest.TestCase):
             RUNTIME.piece_cells.clear()
             RUNTIME.piece_ids_by_cell.clear()
             RUNTIME.attachment_constraints.clear()
+            RUNTIME.manually_attached_pieces.clear()
 
 
 if __name__ == "__main__":

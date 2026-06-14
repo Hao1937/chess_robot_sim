@@ -38,16 +38,12 @@ def attach_piece(
 ) -> OperationResult:
     """将棋子（含所有子部件层）吸附到末端执行器吸盘尖端。
 
-    关键设计：
-    1. 子部件（trim/top_cap/label）质量设为一个很小的正值（0.001）而非 0——
-       Bullet 中 mass=0 是静态刚体，约束求解器无法移动它。
+    采用**手动位置更新**方案（非 PyBullet 约束方案）：
+    1. 子部件质量设为很小的正值（0.001）保持动态。
     2. 禁用主 body 碰撞避免棋盘接触力推回棋子。
-    3. 棋子顶部通过 JOINT_POINT2POINT 约束锚定在吸盘尖端（pad tip），
-       parentFramePosition=(0,0,suction_cup_length) 在 EE 连杆帧中定位吸盘尖端，
-       childFramePosition=(0,0,piece_height/2) 在棋子帧中定位棋子顶部。
-       支持 EE 任意倾斜角度下棋子正确跟随。
-    4. 先禁用碰撞再 teleport 棋子到吸盘尖端下方，创建约束后沉降 60 帧
-       （临时提高求解器迭代至 100），最后精确校正位置。
+    3. Teleport 棋子到吸盘尖端下方，注册到 manually_attached_pieces。
+    4. 棋子跟随 EE 由 sync_manual_attachments() 在每个仿真步后同步，
+       精度 0mm，不受约束求解器迭代次数影响。
     """
     if p is None:
         return OperationResult(True, f"mock attached {piece_id} to end effector {end_effector_id}")
@@ -59,10 +55,11 @@ def attach_piece(
     if body_id is None:
         return OperationResult(False, f"unknown piece id: {piece_id}")
 
-    # 移除旧的吸附约束（如果有）
+    # 移除旧的吸附方式（约束或手动）
     old_constraint = RUNTIME.attachment_constraints.pop(piece_id, None)
     if old_constraint is not None:
         p.removeConstraint(old_constraint, physicsClientId=client_id)
+    RUNTIME.manually_attached_pieces.pop(piece_id, None)
 
     # 获取 EE 当前状态
     ee_state = p.getLinkState(RUNTIME.robot_id, end_effector_id, physicsClientId=client_id)
@@ -72,10 +69,7 @@ def attach_piece(
     # 找到所有棋子相关 body（主 body + 子部件）
     all_body_ids = _get_all_piece_body_ids(piece_id, client_id)
 
-    # ── 计算棋子目标位置 —— 使用吸盘尖端（pad tip）而非连杆原点 ──
-    # 关键修复：当 EE 倾斜时，连杆原点在世界 -Z 上的投影与吸盘尖端位置不同。
-    # 必须先计算吸盘尖端世界坐标（EE 原点 + R_ee * (0,0,suction_cup_length)），
-    # 再将棋子中心置于尖端下方 piece_height/2 处。
+    # ── 计算棋子目标位置 —— 吸盘尖端下方 piece_height/2 ──
     ee_pos = ee_state[0]
     ee_orn = ee_state[1]
     pad_tip_world = _transform_point(
@@ -87,20 +81,16 @@ def attach_piece(
         pad_tip_world[2] - config.piece_height / 2.0,
     )
 
-    # ── 关键（Direction A）：在 teleport 之前禁用碰撞并设正质量 ──
-    # 必须在任何可能触发碰撞的物理操作之前完成，
-    # 避免棋子与棋盘/EE 的接触力将其推离吸盘尖端。
-    # mass=0 → 静态刚体 → 约束无法移动！必须保持 mass > 0
+    # ── 禁用碰撞并设动态质量 ──
     for bid in all_body_ids:
         is_main = (bid == body_id)
-        target_mass = 0.001  # 极轻但仍为正，保证动态 + 约束可解
+        target_mass = 0.001  # 极轻但仍为正，保证动态
         p.changeDynamics(bid, -1, mass=target_mass, physicsClientId=client_id)
         if is_main:
             # 禁用主 body 碰撞：group=0, mask=0 表示不参与任何碰撞检测
             p.setCollisionFilterGroupMask(bid, -1, 0, 0, physicsClientId=client_id)
 
-    # 瞬移主 body 到吸盘尖端下方
-    # 保持 identity 朝向，使 childFramePosition 的 z 偏移沿世界 -z 方向
+    # 瞬移主 body 到吸盘尖端下方（identity 朝向）
     p.resetBasePositionAndOrientation(
         body_id,
         piece_target_pos,
@@ -108,78 +98,86 @@ def attach_piece(
         physicsClientId=client_id,
     )
 
-    # 创建 EE → 主 body 的 JOINT_POINT2POINT 约束（仅约束位置）
-    # 相比 JOINT_FIXED，它不强制棋子旋转匹配 EE 朝向。
-    # parentFramePosition=(0,0,suction_cup_length)：锚点在吸盘尖端（EE 连杆帧）
-    # childFramePosition=(0,0,piece_height/2)：锚点在棋子顶部（棋子本地帧）
-    # 棋子保持 identity 朝向，约束保证棋子顶部始终紧贴吸盘尖端，
-    # 即使 EE 倾斜也能正确跟随。
-    try:
-        constraint_id = p.createConstraint(
-            parentBodyUniqueId=RUNTIME.robot_id,
-            parentLinkIndex=end_effector_id,
-            childBodyUniqueId=body_id,
-            childLinkIndex=-1,
-            jointType=p.JOINT_POINT2POINT,
-            jointAxis=(0.0, 0.0, 0.0),
-            parentFramePosition=(0.0, 0.0, config.suction_cup_length),
-            childFramePosition=(0.0, 0.0, config.piece_height / 2.0),
-            physicsClientId=client_id,
-        )
-    except Exception as exc:
-        # 约束创建失败时恢复原始动力学
-        _restore_piece_dynamics(piece_id, client_id)
-        return OperationResult(True, f"mock attached {piece_id}; constraint unavailable: {exc}")
-    RUNTIME.attachment_constraints[piece_id] = constraint_id
-
-    # ── 约束沉降阶段 ──
-    # 暂时提高求解器迭代次数以更好地满足 JOINT_POINT2POINT + JOINT_FIXED 约束链，
-    # 避免沉降后残留 ~2cm 级别的约束违反（R5 诊断证实默认迭代数不足）。
-    # 仅在此局部提升，结束后恢复，不影响全局仿真实时性。
-    _settle_with_elevated_iterations(client_id, steps=60, elevated_iterations=100)
-
-    # ── 沉降后位置校正（belt-and-suspenders） ──
-    # 即使提高了求解器迭代次数，在 EE 倾斜等极端姿态下约束链可能仍有微量残余误差。
-    # 沉降完成后将棋子精确瞬移至吸盘尖端下方以消除任何残留间隙。
-    ee_settled = p.getLinkState(RUNTIME.robot_id, end_effector_id, physicsClientId=client_id)
-    if ee_settled is not None:
-        pad_tip_final = _transform_point(
-            (0.0, 0.0, config.suction_cup_length), ee_settled[0], ee_settled[1]
-        )
-        corrected_pos = (
-            pad_tip_final[0],
-            pad_tip_final[1],
-            pad_tip_final[2] - config.piece_height / 2.0,
-        )
-        p.resetBasePositionAndOrientation(
-            body_id,
-            corrected_pos,
-            (0.0, 0.0, 0.0, 1.0),
-            physicsClientId=client_id,
-        )
+    # 注册手动吸附映射（不再创建 PyBullet 约束）
+    # 标签盘子部件通过 JOINT_FIXED 约束跟随主 body——
+    # controller 的 sync_manual_attachments 每次步进后同步位置，
+    # 求解器自然会收敛标签约束链，无需额外沉降。
+    RUNTIME.manually_attached_pieces[piece_id] = end_effector_id
 
     return OperationResult(True, f"attached {piece_id} to end effector {end_effector_id}")
 
 
 def detach_piece(piece_id: str) -> OperationResult:
-    """将棋子从末端执行器释放，恢复原始质量和碰撞属性。"""
+    """将棋子从末端执行器释放，恢复原始质量和碰撞属性。
+
+    优先处理手动吸附（manually_attached_pieces），
+    回退处理旧版约束吸附（attachment_constraints）。
+    """
     if p is None:
         return OperationResult(True, f"mock detached {piece_id}")
 
     client_id = ensure_client()
-    constraint_id = RUNTIME.attachment_constraints.pop(piece_id, None)
     if client_id is None:
         return OperationResult(True, f"mock detached {piece_id}; no active client")
-    if constraint_id is None:
-        return OperationResult(True, f"{piece_id} was not attached")
 
-    # 先移除 EE → piece 约束
-    p.removeConstraint(constraint_id, physicsClientId=client_id)
+    # ── 优先：手动吸附解除 ──
+    if piece_id in RUNTIME.manually_attached_pieces:
+        del RUNTIME.manually_attached_pieces[piece_id]
+        _restore_piece_dynamics(piece_id, client_id)
+        return OperationResult(True, f"detached {piece_id}")
 
-    # 恢复棋子动力学属性
-    _restore_piece_dynamics(piece_id, client_id)
+    # ── 回退：旧版约束吸附解除 ──
+    constraint_id = RUNTIME.attachment_constraints.pop(piece_id, None)
+    if constraint_id is not None:
+        p.removeConstraint(constraint_id, physicsClientId=client_id)
+        _restore_piece_dynamics(piece_id, client_id)
+        return OperationResult(True, f"detached {piece_id}")
 
-    return OperationResult(True, f"detached {piece_id}")
+    return OperationResult(True, f"{piece_id} was not attached")
+
+
+def sync_manual_attachments(
+    client_id: int,
+    config: Config = DEFAULT_CONFIG,
+) -> None:
+    """同步所有手动吸附棋子的位置到 EE 吸盘尖端。
+
+    在每个 stepSimulation() 调用后执行，强制将棋子 teleport 到吸盘尖端正下方，
+    消除约束方案中因求解器迭代不足导致的 3-120mm 间隙。
+
+    原理：
+    1. 获取 EE 连杆世界姿态
+    2. 计算吸盘尖端世界坐标（EE 原点 + R_ee * (0,0,suction_cup_length)）
+    3. Teleport 棋子中心到尖端下方 piece_height/2
+
+    标签盘子部件通过自身的 JOINT_FIXED 约束跟随主 body。
+    """
+    if not RUNTIME.manually_attached_pieces:
+        return
+    robot_id = RUNTIME.robot_id
+    if robot_id is None:
+        return
+    for piece_id, ee_id in list(RUNTIME.manually_attached_pieces.items()):
+        body_id = RUNTIME.piece_body_ids.get(piece_id)
+        if body_id is None:
+            continue
+        ee_state = p.getLinkState(robot_id, ee_id, physicsClientId=client_id)
+        if ee_state is None:
+            continue
+        pad_tip = _transform_point(
+            (0.0, 0.0, config.suction_cup_length), ee_state[0], ee_state[1]
+        )
+        piece_pos = (
+            pad_tip[0],
+            pad_tip[1],
+            pad_tip[2] - config.piece_height / 2.0,
+        )
+        p.resetBasePositionAndOrientation(
+            body_id,
+            piece_pos,
+            (0.0, 0.0, 0.0, 1.0),
+            physicsClientId=client_id,
+        )
 
 
 def _restore_piece_dynamics(piece_id: str, client_id: int) -> None:

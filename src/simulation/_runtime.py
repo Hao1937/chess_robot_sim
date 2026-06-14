@@ -27,6 +27,8 @@ class SimulationRuntime:
     piece_cells: dict[str, str] = field(default_factory=dict)
     piece_ids_by_cell: dict[str, str] = field(default_factory=dict)
     attachment_constraints: dict[str, int] = field(default_factory=dict)
+    manually_attached_pieces: dict[str, int] = field(default_factory=dict)
+    # piece_id → end_effector_id 的手动吸附映射（非约束方案）
     human_zone_body_id: int | None = None
 
 
@@ -85,4 +87,5 @@ def clear_scene_bodies() -> None:
     RUNTIME.piece_cells.clear()
     RUNTIME.piece_ids_by_cell.clear()
     RUNTIME.attachment_constraints.clear()
+    RUNTIME.manually_attached_pieces.clear()
     RUNTIME.human_zone_body_id = None

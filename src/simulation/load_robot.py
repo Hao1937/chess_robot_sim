@@ -34,15 +34,28 @@ def load_robot(urdf_path: str | None = None) -> RobotHandle:
 
     joint_indices: list[int] = []
     end_effector_id = -1
-    preferred_ee_names = {"suction_cup_link", "tool0", "ee_link", "wrist_3_link"}
+    preferred_ee_names = ["tool0", "suction_cup_link", "ee_link", "wrist_3_link"]
+    # tool0 优先 —— 其 COM 在 link frame origin (0,0,0)，
+    # getLinkState 返回的 COM 位置 = link origin，无偏移。
+    # suction_cup_link 的 COM 在 (0,0,0.02)，getLinkState 会偏移 20mm，
+    # 导致吸盘尖端位置计算错误（R6 根因）。
+
+    # 先收集所有 link 名称 → joint_index 映射
+    link_name_to_index: dict[str, int] = {}
     for joint_index in range(p.getNumJoints(robot_id, physicsClientId=client_id)):
         joint_info = p.getJointInfo(robot_id, joint_index, physicsClientId=client_id)
         joint_type = joint_info[2]
         link_name = joint_info[12].decode("utf-8")
+        link_name_to_index[link_name] = joint_index
         if joint_type in {p.JOINT_REVOLUTE, p.JOINT_PRISMATIC}:
             joint_indices.append(joint_index)
-        if link_name in preferred_ee_names:
-            end_effector_id = joint_index
+
+    # 按优先级顺序选择第一个存在的 EE link
+    for name in preferred_ee_names:
+        idx = link_name_to_index.get(name)
+        if idx is not None:
+            end_effector_id = idx
+            break
 
     if end_effector_id < 0:
         end_effector_id = p.getNumJoints(robot_id, physicsClientId=client_id) - 1
