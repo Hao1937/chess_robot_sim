@@ -1,7 +1,7 @@
 TODO.md
 ABCD分工选择说明.pdf
 .obsidian/**
-__pycache__/
+__pycache__/**
 *.py[cod]
 *$py.class
 全组TODO时间表.md

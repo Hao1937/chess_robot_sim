@@ -244,6 +244,30 @@ class ContractInterfaceTests(unittest.TestCase):
         self.assertEqual(session["board"].pieces["B1"].piece_id, "red_rook_1")
         self.assertTrue(any("interactive session ended" in message for message in messages))
 
+    def test_interactive_mode_threads_hand_state_into_obstacle_map(self):
+        from main import run_interactive
+
+        commands = iter(["hand_on", "A1 B1", "hand_off", "reset", "quit"])
+
+        session = run_interactive(
+            input_func=lambda prompt: next(commands),
+            output_func=lambda message: None,
+        )
+        results = session["results"]
+
+        self.assertEqual(
+            [result["command"].command_type for result in results],
+            ["hand_on", "move", "hand_off", "reset"],
+        )
+        self.assertEqual(
+            [result.get("human_hand_present") for result in results],
+            [True, True, False, False],
+        )
+        self.assertIn("human_hand_zone", results[0].get("obstacle_ids", []))
+        self.assertIn("human_hand_zone", results[1].get("obstacle_ids", []))
+        self.assertNotIn("human_hand_zone", results[2].get("obstacle_ids", []))
+        self.assertFalse(session["human_hand_present"])
+
     def test_red_chinese_notation_rook_horizontal_move(self):
         from src.common.types import BoardState, Piece, PieceColor, PieceType
         from src.interaction.chinese_notation import parse_chinese_move

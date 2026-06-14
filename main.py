@@ -13,7 +13,7 @@ from src.interaction.chess_rules import validate_move
 from src.interaction.cli import parse_command
 from src.interaction.gui import poll_gui_command
 from src.planning.motion_primitives import build_motion_primitives
-from src.planning.obstacle_map import build_obstacle_map
+from src.planning.obstacle_map import assess_obstacle_intervention, build_obstacle_map
 from src.planning.trajectory_planner import plan_trajectory
 from src.simulation.attachment import attach_piece, detach_piece
 from src.simulation.load_robot import load_robot
@@ -30,6 +30,8 @@ def run_command(
     scene: SceneHandle,
     robot: RobotHandle,
     config: Config = DEFAULT_CONFIG,
+    *,
+    human_hand_present: bool = False,
 ) -> dict[str, object]:
     """Run one command through the A/B/C/D pipeline using an existing session."""
     validation = validate_move(board, command)
@@ -38,7 +40,16 @@ def run_command(
 
     actions = make_logical_actions(board, command)
     primitives = build_motion_primitives(actions, config)
-    obstacles = build_obstacle_map(piece_cells=list(board.pieces), extra_obstacles=scene.obstacles, config=config)
+    obstacles = build_obstacle_map(
+        piece_cells=list(board.pieces),
+        extra_obstacles=scene.obstacles,
+        human_hand_present=human_hand_present,
+        config=config,
+    )
+    safety_decisions = [
+        assess_obstacle_intervention(primitive.target_xyz, obstacles, config)
+        for primitive in primitives
+    ]
     trajectory = plan_trajectory(primitives, obstacles, config)
 
     should_attach_piece = command.command_type == "move" and command.from_cell in board.pieces
@@ -55,6 +66,9 @@ def run_command(
     return {
         "command": command,
         "actions": actions,
+        "human_hand_present": human_hand_present,
+        "obstacle_ids": [obstacle.obstacle_id for obstacle in obstacles],
+        "safety_decisions": safety_decisions,
         "primitive_count": len(primitives),
         "trajectory_points": len(trajectory.joint_waypoints),
         "execution": execution,
@@ -70,7 +84,14 @@ def run_demo(command_text: str = "A1 B1") -> dict[str, object]:
     robot = load_robot()
     scene = build_scene(config=config, obstacle_mode=obstacle_mode)
     board = create_initial_board()
-    return run_command(command, board, scene, robot, config)
+    return run_command(
+        command,
+        board,
+        scene,
+        robot,
+        config,
+        human_hand_present=command.command_type == "hand_on",
+    )
 
 
 def run_interactive(
@@ -84,6 +105,7 @@ def run_interactive(
     robot = load_robot()
     scene = build_scene(config=config, obstacle_mode="mode_1")
     results: list[dict[str, object]] = []
+    human_hand_present = False
     steps = 0
 
     output_func("interactive session started; enter moves, obstacle_mode N, reset, hand_on/off, or quit")
@@ -95,11 +117,23 @@ def run_interactive(
             output_func("interactive session ended")
             break
 
+        if command.command_type == "hand_on":
+            human_hand_present = True
+        elif command.command_type == "hand_off":
+            human_hand_present = False
+
         if command.command_type == "obstacle_mode":
             scene = build_scene(config=config, obstacle_mode=command.mode)
 
         try:
-            result = run_command(command, board, scene, robot, config)
+            result = run_command(
+                command,
+                board,
+                scene,
+                robot,
+                config,
+                human_hand_present=human_hand_present,
+            )
         except ValueError as exc:
             output_func(f"error: {exc}")
             continue
@@ -111,7 +145,13 @@ def run_interactive(
             output_func("interactive session ended")
             break
 
-    return {"board": board, "scene": scene, "robot": robot, "results": results}
+    return {
+        "board": board,
+        "scene": scene,
+        "robot": robot,
+        "human_hand_present": human_hand_present,
+        "results": results,
+    }
 
 
 def apply_logical_actions(board: BoardState, actions: list[LogicalAction]) -> None:
