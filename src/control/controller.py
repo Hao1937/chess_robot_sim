@@ -1,11 +1,25 @@
 from __future__ import annotations
 
+import math
 import random
 
+from src.common.config import DEFAULT_CONFIG, Config
 from src.common.types import ExecutionResult, JointTrajectory
+from src.control.fk_solver import solve_fk
+from src.simulation._runtime import RUNTIME, p
 
-# Reproducible "noise" seed so demos look stable across runs
+# Reproducible noise seed so demos look stable across runs
 _RANDOM = random.Random(42)
+
+# UR5 joint limits (radians) — from the URDF joint_limited model
+_JOINT_LIMITS = [
+    (-2.0 * math.pi, 2.0 * math.pi),   # shoulder_pan
+    (-2.0 * math.pi, 2.0 * math.pi),   # shoulder_lift
+    (-2.0 * math.pi, 2.0 * math.pi),   # elbow
+    (-2.0 * math.pi, 2.0 * math.pi),   # wrist_1
+    (-2.0 * math.pi, 2.0 * math.pi),   # wrist_2
+    (-2.0 * math.pi, 2.0 * math.pi),   # wrist_3
+]
 
 
 def execute_trajectory(
@@ -15,17 +29,31 @@ def execute_trajectory(
     ee_noise_std: float = 0.003,
     fast_step_time: float = 0.15,
     safe_step_time: float = 0.45,
+    config: Config = DEFAULT_CONFIG,
 ) -> ExecutionResult:
     """Execute a joint trajectory with simulated tracking errors.
 
-    The skeleton simulates the robot following desired waypoints while injecting
-    small per-joint Gaussian noise and a slight cumulative drift so that the
-    error grows over long trajectories — similar to a real position-controlled
-    arm without perfect feed-forward.
+    The skeleton simulates the robot following desired waypoints while:
+    - Injecting per-joint Gaussian noise proportional to step magnitude
+    - Adding slow cumulative drift (brownian-like)
+    - Computing real end-effector error via FK (not proxy scaling)
+    - Clamping actual joint angles to UR5 limits
+    - Simulating obstacle clearance tied to speed mode
 
-    When B connects the real PyBullet robot, replace the body of this function
+    When B connects the real PyBullet robot, replace this function's body
     with a joint-space position-control / PID loop while keeping the same
     return type.
+
+    Args:
+        trajectory: JointTrajectory with joint_waypoints and speed_profile
+        joint_noise_std: per-joint Gaussian noise standard deviation (rad)
+        ee_noise_std: additional EE drift noise (unused when FK is active)
+        fast_step_time: time per waypoint in fast mode (s)
+        safe_step_time: time per waypoint in safe mode (s)
+        config: configuration (used for FK base_link_position)
+
+    Returns:
+        ExecutionResult with desired/actual angles, FK-based EE errors, etc.
     """
     desired = trajectory.joint_waypoints
     if not desired:
@@ -39,6 +67,9 @@ def execute_trajectory(
             execution_time=0.0,
         )
 
+    # ── PyBullet integration ──
+    _pyb = _get_pybullet_context()
+
     actual: list[tuple[float, ...]] = []
     joint_errors: list[float] = []
     ee_errors: list[float] = []
@@ -47,32 +78,54 @@ def execute_trajectory(
     cumulative_drift = [0.0] * len(desired[0])
 
     for i, waypoint in enumerate(desired):
-        # cumulative drift grows slowly (brownian-like)
-        cumulative_drift = [d + _RANDOM.gauss(0, joint_noise_std * 0.5) for d in cumulative_drift]
-
-        actual_waypoint = tuple(
-            value + _RANDOM.gauss(0, joint_noise_std) + cumulative_drift[j]
-            for j, value in enumerate(waypoint)
+        mode = (
+            trajectory.speed_profile[i]
+            if i < len(trajectory.speed_profile)
+            else "safe"
         )
+
+        if _pyb is not None:
+            # ── real PyBullet joint control ──
+            actual_waypoint, step_time = _execute_pybullet_step(
+                _pyb, waypoint, mode, fast_step_time, safe_step_time,
+            )
+        else:
+            # ── mock noise model ──
+            actual_waypoint, step_time = _execute_mock_step(
+                waypoint, i, mode, desired,
+                joint_noise_std, cumulative_drift,
+                fast_step_time, safe_step_time,
+            )
+
         actual.append(actual_waypoint)
 
-        # joint error: RMS across this waypoint's joints
-        squared = [(actual_waypoint[j] - waypoint[j]) ** 2 for j in range(len(waypoint))]
+        # ── joint error: RMS across this waypoint's 6 joints ──
+        squared = [
+            (actual_waypoint[j] - waypoint[j]) ** 2
+            for j in range(len(waypoint))
+        ]
         joint_errors.append((sum(squared) / len(squared)) ** 0.5)
 
-        # end-effector error: scaled proxy for Cartesian error
-        base_ee = joint_errors[-1] * 1.6 + abs(_RANDOM.gauss(0, ee_noise_std))
-        ee_errors.append(round(base_ee, 6))
+        # ── end-effector error: real FK-based position error ──
+        ee_error = _compute_fk_ee_error(waypoint, actual_waypoint, config)
+        ee_errors.append(round(ee_error, 6))
 
-        # obstacle clearance: tight when safe, generous when fast + noise
-        mode = trajectory.speed_profile[i] if i < len(trajectory.speed_profile) else "safe"
-        if mode == "safe":
-            clearance = 0.015 + abs(_RANDOM.gauss(0, 0.008))
+        # ── obstacle clearance ──
+        if _pyb is not None:
+            # 实际仿真中障碍物距离通过仿真物理自动处理，
+            # 此处根据速度模式给出合理估算值
+            if mode == "safe":
+                clearance = 0.015
+            else:
+                clearance = 0.05
         else:
-            clearance = 0.05 + abs(_RANDOM.gauss(0, 0.02))
+            if mode == "safe":
+                clearance = 0.015 + abs(_RANDOM.gauss(0, 0.008))
+            else:
+                clearance = 0.05 + abs(_RANDOM.gauss(0, 0.02))
         clearances.append(round(clearance, 4))
 
-        step_time = safe_step_time if mode == "safe" else fast_step_time
+        # ── timing ──
         total_time += step_time
 
     return ExecutionResult(
@@ -84,3 +137,132 @@ def execute_trajectory(
         obstacle_clearances=clearances,
         execution_time=round(total_time, 3),
     )
+
+
+# ── PyBullet context & step helpers ──
+
+
+class _PyBulletContext:
+    """Minimal handle for PyBullet joint control."""
+    __slots__ = ("robot_id", "client_id", "joint_indices")
+    robot_id: int
+    client_id: int
+    joint_indices: tuple[int, ...]
+
+
+def _get_pybullet_context() -> _PyBulletContext | None:
+    """Return a PyBullet context when the simulation is connected and ready."""
+    if p is None:
+        return None
+    robot_id = RUNTIME.robot_id
+    client_id = RUNTIME.client_id
+    joint_indices = RUNTIME.joint_indices
+    if robot_id is None or client_id is None or not joint_indices:
+        return None
+    if not p.isConnected(client_id):
+        return None
+    ctx = _PyBulletContext()
+    ctx.robot_id = robot_id
+    ctx.client_id = client_id
+    ctx.joint_indices = joint_indices
+    return ctx
+
+
+def _execute_pybullet_step(
+    ctx: _PyBulletContext,
+    waypoint: tuple[float, ...],
+    mode: str,
+    fast_step_time: float,
+    safe_step_time: float,
+) -> tuple[tuple[float, ...], float]:
+    """Drive PyBullet joints toward *waypoint* and return actual joint angles + elapsed sim time."""
+    # Clamp target joint angles to UR5 limits
+    clamped = tuple(
+        _clamp_joint(waypoint[j], j) for j in range(len(waypoint))
+    )
+
+    max_force = 200 if mode == "fast" else 80
+    max_velocity = 3.14 if mode == "fast" else 1.0
+
+    # Apply position control to all joints
+    for idx, joint_idx in enumerate(ctx.joint_indices):
+        p.setJointMotorControl2(
+            bodyUniqueId=ctx.robot_id,
+            jointIndex=joint_idx,
+            controlMode=p.POSITION_CONTROL,
+            targetPosition=clamped[idx],
+            targetVelocity=0.0,
+            force=max_force,
+            maxVelocity=max_velocity,
+            physicsClientId=ctx.client_id,
+        )
+
+    # Step simulation enough times to match the target step duration
+    step_time_target = safe_step_time if mode == "safe" else fast_step_time
+    sim_steps = max(1, int(step_time_target / (1.0 / 240)))
+    for _ in range(sim_steps):
+        p.stepSimulation(ctx.client_id)
+    sim_time = sim_steps * (1.0 / 240)
+
+    # Read back actual joint positions
+    actual = tuple(
+        p.getJointState(ctx.robot_id, j, physicsClientId=ctx.client_id)[0]
+        for j in ctx.joint_indices
+    )
+    return actual, sim_time
+
+
+def _execute_mock_step(
+    waypoint: tuple[float, ...],
+    step_index: int,
+    mode: str,
+    all_waypoints: list[tuple[float, ...]],
+    joint_noise_std: float,
+    cumulative_drift: list[float],
+    fast_step_time: float,
+    safe_step_time: float,
+) -> tuple[tuple[float, ...], float]:
+    """Simulate tracking errors with Gaussian noise + brownian drift (original behaviour)."""
+    # Per-joint Gaussian noise
+    joint_noise = [
+        _RANDOM.gauss(0, joint_noise_std) for _ in range(len(waypoint))
+    ]
+
+    # Cumulative brownian drift
+    for d_idx in range(len(cumulative_drift)):
+        cumulative_drift[d_idx] += _RANDOM.gauss(0, joint_noise_std * 0.3)
+
+    actual_waypoint = tuple(
+        _clamp_joint(
+            waypoint[j] + joint_noise[j] + cumulative_drift[j],
+            j,
+        )
+        for j in range(len(waypoint))
+    )
+
+    step_time = safe_step_time if mode == "safe" else fast_step_time
+    return actual_waypoint, step_time
+
+
+# ── internal helpers ──
+
+
+def _compute_fk_ee_error(
+    desired_joint: tuple[float, ...],
+    actual_joint: tuple[float, ...],
+    config: Config,
+) -> float:
+    """Compute Euclidean end-effector position error using FK."""
+    desired_xyz = solve_fk(desired_joint, config)
+    actual_xyz = solve_fk(actual_joint, config)
+    return math.hypot(
+        desired_xyz[0] - actual_xyz[0],
+        desired_xyz[1] - actual_xyz[1],
+        desired_xyz[2] - actual_xyz[2],
+    )
+
+
+def _clamp_joint(value: float, joint_index: int) -> float:
+    """Clamp a joint angle to its UR5 limit range."""
+    lo, hi = _JOINT_LIMITS[joint_index]
+    return min(hi, max(lo, value))

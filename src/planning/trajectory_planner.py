@@ -10,6 +10,7 @@ from src.planning.trajectory_smoother import (
     shortcut_smoothing,
     smooth_joint_trajectory,
 )
+from src.planning.visualization import draw_direct_line, draw_path_debug
 
 
 def plan_trajectory(
@@ -116,6 +117,12 @@ def _plan_horizontal_segment(
     )
 
     if need_detour:
+        # ── 可视化：画出直接路径（绿色）以示对比 ──
+        draw_direct_line(
+            (start_xy[0], start_xy[1], z_plane),
+            (end_xy[0], end_xy[1], z_plane),
+        )
+
         search_result = a_star_2d(
             start_xy, end_xy,
             obstacles=primitive_obstacles,
@@ -141,6 +148,9 @@ def _plan_horizontal_segment(
                 path_3d = interpolate_waypoints_cartesian(
                     path_3d, config.waypoint_interpolation_step,
                 )
+
+            # ── 可视化：画出 A* 绕行路径（红色） ──
+            draw_path_debug(path_3d, color=(0.9, 0.15, 0.1))
 
             # 跳过首点（与 prev 重复）
             start_idx = 1 if prev is not None else 0
