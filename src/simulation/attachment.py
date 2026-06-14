@@ -78,6 +78,18 @@ def attach_piece(
     piece_target_z = ee_pos[2] - total_offset
     piece_target_pos = (ee_pos[0], ee_pos[1], piece_target_z)
 
+    # ── 关键（Direction A）：在 teleport 之前禁用碰撞并设正质量 ──
+    # 必须在任何可能触发碰撞的物理操作之前完成，
+    # 避免棋子与棋盘/EE 的接触力将其推离吸盘尖端。
+    # mass=0 → 静态刚体 → 约束无法移动！必须保持 mass > 0
+    for bid in all_body_ids:
+        is_main = (bid == body_id)
+        target_mass = 0.001  # 极轻但仍为正，保证动态 + 约束可解
+        p.changeDynamics(bid, -1, mass=target_mass, physicsClientId=client_id)
+        if is_main:
+            # 禁用主 body 碰撞：group=0, mask=0 表示不参与任何碰撞检测
+            p.setCollisionFilterGroupMask(bid, -1, 0, 0, physicsClientId=client_id)
+
     # 瞬移主 body 到吸盘尖端下方
     # 保持 identity 朝向，使 childFramePosition 的 z 偏移沿世界 -z 方向
     p.resetBasePositionAndOrientation(
@@ -86,18 +98,6 @@ def attach_piece(
         (0.0, 0.0, 0.0, 1.0),
         physicsClientId=client_id,
     )
-
-    # ── 关键：将所有棋子 body 设为正质量（动态）并禁用碰撞 ──
-    # mass=0 → 静态刚体 → 约束无法移动！必须保持 mass > 0
-    # 禁用碰撞防止棋盘接触力推回棋子
-    for bid in all_body_ids:
-        is_main = (bid == body_id)
-        # 子部件无碰撞形状，只需改质量；主 body 还需禁用碰撞
-        target_mass = 0.001  # 极轻但仍为正，保证动态 + 约束可解
-        p.changeDynamics(bid, -1, mass=target_mass, physicsClientId=client_id)
-        if is_main:
-            # 禁用主 body 碰撞：group=0, mask=0 表示不参与任何碰撞检测
-            p.setCollisionFilterGroupMask(bid, -1, 0, 0, physicsClientId=client_id)
 
     # 创建 EE → 主 body 的 JOINT_POINT2POINT 约束（仅约束位置）
     # 相比 JOINT_FIXED，它不强制棋子旋转匹配 EE 朝向。
@@ -123,10 +123,26 @@ def attach_piece(
         return OperationResult(True, f"mock attached {piece_id}; constraint unavailable: {exc}")
     RUNTIME.attachment_constraints[piece_id] = constraint_id
 
-    # 推进仿真让子部件约束生效——主 body 已瞬移至吸盘尖端下方，
-    # 子部件通过各自的 JOINT_FIXED 约束跟随主 body 偏移量对齐
-    for _ in range(30):
-        p.stepSimulation(client_id)
+    # ── 约束沉降阶段 ──
+    # 暂时提高求解器迭代次数以更好地满足 JOINT_POINT2POINT + JOINT_FIXED 约束链，
+    # 避免沉降后残留 ~2cm 级别的约束违反（R5 诊断证实默认迭代数不足）。
+    # 仅在此局部提升，结束后恢复，不影响全局仿真实时性。
+    _settle_with_elevated_iterations(client_id, steps=60, elevated_iterations=100)
+
+    # ── 沉降后位置校正（belt-and-suspenders） ──
+    # 即使提高了求解器迭代次数，在 EE 倾斜等极端姿态下约束链可能仍有微量残余误差。
+    # 沉降完成后将棋子精确瞬移至理论吸盘尖端位置以消除任何残留间隙。
+    ee_settled = p.getLinkState(RUNTIME.robot_id, end_effector_id, physicsClientId=client_id)
+    if ee_settled is not None:
+        ee_final = ee_settled[0]
+        corrected_z = ee_final[2] - total_offset
+        corrected_pos = (ee_final[0], ee_final[1], corrected_z)
+        p.resetBasePositionAndOrientation(
+            body_id,
+            corrected_pos,
+            (0.0, 0.0, 0.0, 1.0),
+            physicsClientId=client_id,
+        )
 
     return OperationResult(True, f"attached {piece_id} to end effector {end_effector_id}")
 
@@ -174,3 +190,39 @@ def _restore_piece_dynamics(piece_id: str, client_id: int) -> None:
             # 标签盘：保持 mass=0.001（动态，确保跟随主 body 下落）
             # 无碰撞形状，无需调整碰撞过滤
             p.changeDynamics(bid, -1, mass=0.001, physicsClientId=client_id)
+
+
+def _settle_with_elevated_iterations(
+    client_id: int,
+    steps: int = 60,
+    elevated_iterations: int = 100,
+) -> None:
+    """临时提高求解器迭代次数运行指定步数，完成后恢复默认值。
+
+    仅在约束创建后的沉降阶段使用，避免全局提高迭代次数导致
+    仿真实时性下降（R5 教训：全局 500 次迭代造成 GUI 明显卡顿）。
+    """
+    try:
+        # 保存当前迭代次数
+        original_iterations = p.getPhysicsEngineParameter(
+            "numSolverIterations", physicsClientId=client_id
+        )
+    except Exception:
+        original_iterations = None
+
+    try:
+        p.setPhysicsEngineParameter(
+            numSolverIterations=elevated_iterations, physicsClientId=client_id
+        )
+        for _ in range(steps):
+            p.stepSimulation(client_id)
+    finally:
+        # 恢复原始迭代次数
+        if original_iterations is not None:
+            try:
+                p.setPhysicsEngineParameter(
+                    numSolverIterations=original_iterations,
+                    physicsClientId=client_id,
+                )
+            except Exception:
+                pass
