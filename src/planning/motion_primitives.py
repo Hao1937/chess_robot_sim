@@ -23,6 +23,7 @@ def build_motion_primitives(actions: list[LogicalAction], config: Config = DEFAU
             primitives.append(MotionPrimitive("retreat", action.cell, cell_above_world(action.cell, config), "safe"))
         elif action.action_type == "safety_pause":
             primitives.append(MotionPrimitive("pause", action.cell, (0.0, 0.0, config.z_safe), "safe"))
+        #elif action.action_type == ''
         else:
             print('Error, primitives not defined!')
     return primitives

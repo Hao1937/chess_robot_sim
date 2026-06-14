@@ -14,3 +14,4 @@ results/*.log
 results/simulation_preview*.png
 !results/.gitkeep
 全组TODO时间表.md
+交接文档.md
