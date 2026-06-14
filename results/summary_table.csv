@@ -1,3 +1,3 @@
 success,max_joint_error,max_end_effector_error,min_obstacle_clearance,execution_time,scenario,command,primitive_count,trajectory_points,human_hand_present,obstacle_mode,planning_time_s,search_detours
-True,2.3647994206160794,0.950937,0.015,3.3,09_obstacle_detour,A1 A5,8,69,False,mode_3,2.3292,0
-True,2.1707010631772152,0.932938,0.015,3.3,09_obstacle_detour,A5 I5,8,103,False,mode_3,2.2718,0
+True,0.10108236690778456,0.20033,0.015,1.125,09_obstacle_detour,A1 A5,8,69,False,mode_3,1.3783,0
+True,0.030547855321333167,0.011204,0.015,1.125,09_obstacle_detour,A5 I5,8,103,False,mode_3,2.2786,0

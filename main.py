@@ -249,8 +249,30 @@ def main() -> None:
         print("Motion primitives:", result["primitive_count"])
         print("Trajectory points:", result["trajectory_points"])
         print("Execution summary:", result["summary"])
+        _maybe_wait_gui()
     else:
         parser.print_help()
+
+
+def _maybe_wait_gui() -> None:
+    """GUI 模式下保持窗口打开，直到用户按 Enter。"""
+    import os
+    if os.environ.get("CHESS_ROBOT_PYBULLET_GUI") != "1":
+        return
+    try:
+        from src.simulation._runtime import RUNTIME, p
+        if p is not None and RUNTIME.client_id is not None:
+            print("\n[GUI] PyBullet 窗口保持打开，按 Enter 关闭...")
+            try:
+                input()
+            except EOFError:
+                pass
+            try:
+                p.disconnect(RUNTIME.client_id)
+            except Exception:
+                pass
+    except Exception:
+        pass
 
 
 if __name__ == "__main__":

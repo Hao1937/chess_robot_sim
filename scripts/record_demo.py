@@ -148,6 +148,13 @@ def run_scenario(
     board = create_initial_board()
     human_hand_present = False
 
+    # 诊断：显示当前控制模式
+    from src.simulation._runtime import RUNTIME as _rt, pybullet_available as _pb_ok
+    if _pb_ok() and _rt.robot_id is not None:
+        print(f"  [PyBullet] 模式=物理驱动 (robot_id={_rt.robot_id}, joints={_rt.joint_indices})")
+    else:
+        print(f"  [Mock] 模式=噪声模拟 (PyBullet={_pb_ok()}, robot_id={_rt.robot_id})")
+
     all_summaries: list[dict] = []
     scenario_dir = output_dir / label
     scenario_dir.mkdir(parents=True, exist_ok=True)
@@ -250,7 +257,10 @@ def main():
     parser.add_argument("--quick", action="store_true", help="快速模式（少场景）")
     parser.add_argument("--scenario", type=str, help="只跑指定场景名")
     parser.add_argument("--output", type=str, default="results", help="输出目录")
+    parser.add_argument("--wait", action="store_true", help="GUI 模式下等待按键再关闭")
     args = parser.parse_args()
+
+    gui_mode = os.environ.get("CHESS_ROBOT_PYBULLET_GUI") == "1"
 
     output_dir = Path(args.output)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -292,6 +302,20 @@ def main():
             print(f"{row.get('scenario',''):<30} {row.get('command',''):<12} "
                   f"{row.get('max_joint_error',0):>12.6f} {row.get('max_end_effector_error',0):>12.6f} "
                   f"{row.get('min_obstacle_clearance',0):>10.4f} {row.get('execution_time',0):>8.3f}")
+
+    # ── GUI 模式保持窗口 ──
+    if gui_mode or args.wait:
+        from src.simulation._runtime import RUNTIME, p
+        if p is not None and RUNTIME.client_id is not None:
+            print(f"\n[GUI] PyBullet 窗口保持打开，按 Enter 关闭...")
+            try:
+                input()
+            except EOFError:
+                pass  # 非交互环境静默退出
+            try:
+                p.disconnect(RUNTIME.client_id)
+            except Exception:
+                pass
 
 
 def _count_detours(contexts) -> int:

@@ -70,6 +70,10 @@ def execute_trajectory(
     # ── PyBullet integration ──
     _pyb = _get_pybullet_context()
 
+    # 初始化：将机械臂关节重置到轨迹起点，避免从 URDF 默认姿态追赶
+    if _pyb is not None and desired:
+        _init_joint_state(_pyb, desired[0])
+
     actual: list[tuple[float, ...]] = []
     joint_errors: list[float] = []
     ee_errors: list[float] = []
@@ -150,6 +154,40 @@ class _PyBulletContext:
     joint_indices: tuple[int, ...]
 
 
+def _init_joint_state(ctx: _PyBulletContext, waypoint: tuple[float, ...]) -> None:
+    """将机械臂关节瞬间重置到轨迹起点，并同步电机目标。
+
+    先设电机目标位置再重置关节状态，避免重力导致大幅回弹。
+    """
+    clamped = tuple(
+        _clamp_joint(waypoint[j], j) for j in range(len(waypoint))
+    )
+    for idx, joint_idx in enumerate(ctx.joint_indices):
+        # 先设电机目标到位
+        p.setJointMotorControl2(
+            bodyUniqueId=ctx.robot_id,
+            jointIndex=joint_idx,
+            controlMode=p.POSITION_CONTROL,
+            targetPosition=clamped[idx],
+            targetVelocity=0.0,
+            force=500,
+            maxVelocity=10.0,
+            positionGain=0.6,
+            velocityGain=0.8,
+            physicsClientId=ctx.client_id,
+        )
+        # 再重置关节物理状态
+        p.resetJointState(
+            ctx.robot_id,
+            joint_idx,
+            targetValue=clamped[idx],
+            physicsClientId=ctx.client_id,
+        )
+    # 让物理稳定到目标姿态
+    for _ in range(240):
+        p.stepSimulation(ctx.client_id)
+
+
 def _get_pybullet_context() -> _PyBulletContext | None:
     """Return a PyBullet context when the simulation is connected and ready."""
     if p is None:
@@ -181,8 +219,10 @@ def _execute_pybullet_step(
         _clamp_joint(waypoint[j], j) for j in range(len(waypoint))
     )
 
-    max_force = 200 if mode == "fast" else 80
-    max_velocity = 3.14 if mode == "fast" else 1.0
+    max_force = 500 if mode == "fast" else 200
+    max_velocity = 10.0 if mode == "fast" else 5.0
+    position_gain = 0.6
+    velocity_gain = 0.8
 
     # Apply position control to all joints
     for idx, joint_idx in enumerate(ctx.joint_indices):
@@ -194,12 +234,13 @@ def _execute_pybullet_step(
             targetVelocity=0.0,
             force=max_force,
             maxVelocity=max_velocity,
+            positionGain=position_gain,
+            velocityGain=velocity_gain,
             physicsClientId=ctx.client_id,
         )
 
-    # Step simulation enough times to match the target step duration
-    step_time_target = safe_step_time if mode == "safe" else fast_step_time
-    sim_steps = max(1, int(step_time_target / (1.0 / 240)))
+    # Step simulation to let joints settle toward targets
+    sim_steps = 40 if mode == "fast" else 80
     for _ in range(sim_steps):
         p.stepSimulation(ctx.client_id)
     sim_time = sim_steps * (1.0 / 240)

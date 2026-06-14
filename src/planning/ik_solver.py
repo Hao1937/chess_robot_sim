@@ -4,24 +4,123 @@ import math
 
 from src.common.config import DEFAULT_CONFIG, Config
 
-
 _DH_A = (0.0, -0.42500, -0.39225, 0.0, 0.0, 0.0)
 _DH_D = (0.089159, 0.0, 0.0, 0.10915, 0.09465, 0.08230)
 
+# 缓存的 PyBullet IK 上下文，避免每次 solve_ik 都查 RUNTIME
+_PYB_IK_CTX: dict = {}
+
+
+def _get_pyb_ik_context() -> dict | None:
+    """获取 PyBullet IK 所需资源，失败返回 None（回退到解析 IK）。"""
+    global _PYB_IK_CTX
+    if _PYB_IK_CTX:
+        return _PYB_IK_CTX
+    try:
+        from src.simulation._runtime import RUNTIME, p
+    except ImportError:
+        return None
+    if p is None:
+        return None
+    robot_id = RUNTIME.robot_id
+    client_id = RUNTIME.client_id
+    if robot_id is None or client_id is None:
+        return None
+    if not p.isConnected(client_id):
+        return None
+    # 找到 tool0 (优先) 或 ee_link 的 link 索引
+    ee_idx = None
+    joint_indices = []
+    num = p.getNumJoints(robot_id, physicsClientId=client_id)
+    for j in range(num):
+        info = p.getJointInfo(robot_id, j, physicsClientId=client_id)
+        link_name = info[12].decode("utf-8")
+        joint_type = info[2]
+        if joint_type in {p.JOINT_REVOLUTE, p.JOINT_PRISMATIC}:
+            joint_indices.append(j)
+        if link_name == "tool0" and ee_idx is None:
+            ee_idx = j
+    if ee_idx is None:
+        # fallback: 最后一个 revolute 关节的 link (wrist_3_link)
+        ee_idx = num - 5  # 跳过固定关节
+    _PYB_IK_CTX = {
+        "p": p,
+        "robot_id": robot_id,
+        "client_id": client_id,
+        "ee_idx": ee_idx,
+        "joint_indices": tuple(joint_indices),
+    }
+    return _PYB_IK_CTX
+
 
 def solve_ik(target_xyz: tuple[float, float, float], config: Config = DEFAULT_CONFIG) -> tuple[float, ...]:
-    """Solve UR5 inverse kinematics for a target point using an analytic backend.
+    """Solve UR5 inverse kinematics for a target point.
 
-    The translated MATLAB script solves a full 4x4 target pose. This project API
-    currently provides only position, so we use a fixed tool orientation with the
-    tool z-axis pointing downward toward the board.
+    当 PyBullet 可用时优先使用 PyBullet 内置 IK（保证与 URDF 模型运动学一致），
+    失败或不可用时回退到解析 IK。
     """
+    pyb_solution = _solve_ik_pybullet(target_xyz, config)
+    if pyb_solution is not None:
+        return pyb_solution
+
     target_pose = _target_pose_from_xyz(target_xyz, config)
     solutions = _inverse_kinematics_ur5(target_pose)
     if not solutions:
         return config.home_pose
     best = min(solutions, key=lambda solution: _distance_to_home(solution, config.base_link_position))
     return tuple(round(_wrap_to_pi(theta), 4) for theta in best)
+
+
+def _solve_ik_pybullet(
+    target_xyz: tuple[float, float, float],
+    config: Config = DEFAULT_CONFIG,
+) -> tuple[float, ...] | None:
+    """使用 PyBullet 内置 IK 求解，保证与 URDF 模型运动学一致。
+
+    接收世界坐标 target_xyz，内部转换为 robot base 系传给 PyBullet IK。
+    EE link 使用「tool0」(joint 8)，转动关节为 1-6。
+    失败时返回 None，调用方回退到解析 IK。
+    """
+    ctx = _get_pyb_ik_context()
+    if ctx is None:
+        return None
+
+    p = ctx["p"]
+    robot_id = ctx["robot_id"]
+    client_id = ctx["client_id"]
+    # 优先 tool0 (joint 8)，ee_link (joint 7) 备选
+    ee_idx = ctx["ee_idx"]
+    joint_indices = ctx["joint_indices"]
+
+    # 目标在 robot base 系下的位置
+    target_pos = [
+        target_xyz[0] - config.base_link_position[0],
+        target_xyz[1] - config.base_link_position[1],
+        target_xyz[2] - config.base_link_position[2],
+    ]
+
+    # 工具姿态：x 同世界 x，y 反向世界 y，z 向下（= 绕 x 轴转 π）
+    target_orn = p.getQuaternionFromEuler((math.pi, 0.0, 0.0))
+
+    try:
+        joint_angles = p.calculateInverseKinematics(
+            robot_id,
+            ee_idx,
+            target_pos,
+            target_orn,
+            lowerLimits=[-math.pi] * 6,
+            upperLimits=[math.pi] * 6,
+            jointRanges=[2.0 * math.pi] * 6,
+            restPoses=list(config.home_pose[:6]),
+            physicsClientId=client_id,
+        )
+    except Exception:
+        return None
+
+    if len(joint_angles) < 6:
+        return None
+
+    return tuple(round(_wrap_to_pi(joint_angles[i]), 4) for i in range(6))
 
 
 def is_reachable(target_xyz: tuple[float, float, float], config: Config = DEFAULT_CONFIG) -> bool:
