@@ -3,7 +3,7 @@ from __future__ import annotations
 from src.common.config import DEFAULT_CONFIG, Config
 from src.common.types import JointTrajectory, MotionPrimitive, Obstacle, PrimitivePlanningContext
 from src.planning.collision_checker import direct_path_clear, check_segment_collision_multi_z
-from src.planning.ik_solver import is_reachable, solve_ik
+from src.planning.ik_solver import current_joint_seed, is_reachable, solve_ik
 from src.planning.path_search import a_star_2d, a_star_theta_2d
 from src.planning.trajectory_smoother import (
     interpolate_waypoints_cartesian,
@@ -88,9 +88,11 @@ def plan_trajectory(
     speed_profile = speed_profile[:len(cartesian_waypoints)]
 
     # ── IK 转换（链式：前一个解作为下一个的种子，确保解分支连续）──
+    # 链起点从机器人**当前实际姿态**播种（而非固定 home_pose），
+    # 使规划轨迹从机器人物理位置开始，消除段间跳变与远分支跳跃。
     # 同时对每个 waypoint 做可达性预检
     joint_waypoints: list[tuple[float, ...]] = []
-    seed = config.home_pose[:6]
+    seed = current_joint_seed(config)
     unreachable_count = 0
     for wp in cartesian_waypoints:
         if not is_reachable(wp, config):

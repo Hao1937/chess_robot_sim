@@ -6,7 +6,7 @@ from typing import Callable
 
 from src.common.config import DEFAULT_CONFIG, Config
 from src.common.types import BoardState, ExecutionResult, JointTrajectory, LogicalAction, MoveCommand, PieceColor, RobotHandle, SceneHandle
-from src.control.controller import execute_trajectory, reset_initialization, set_simulation_pump_callback
+from src.control.controller import execute_trajectory, set_simulation_pump_callback
 from src.control.logger import summarize_execution
 from src.interaction.board_state import create_initial_board, make_logical_actions
 from src.interaction.chess_rules import validate_move
@@ -34,10 +34,9 @@ def run_command(
     human_hand_present: bool = False,
 ) -> dict[str, object]:
     """Run one command through the A/B/C/D pipeline using an existing session."""
-    # 重置关节初始化标志，确保本命令的第一个 trajectory 段
-    # 会将机械臂 teleport 到正确的起始位姿。这避免因上一命令
-    # 结束时关节位姿与当前 IK 解分支不同而导致 PD 控制器剧烈追踪。
-    reset_initialization()
+    # 不再重置/teleport 关节：规划层已从机器人当前实际姿态播种 IK 链
+    # （trajectory_planner.current_joint_seed），轨迹从物理位置平滑开始，
+    # 段间分支连续，无需 teleport 对齐。
 
     # 清理上一个命令的路径可视化线条，避免累积
     clear_debug_visuals()

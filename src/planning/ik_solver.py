@@ -4,50 +4,36 @@ import math
 
 from src.common.config import DEFAULT_CONFIG, Config
 
-# 缓存的 PyBullet IK 上下文，避免每次 solve_ik 都查 RUNTIME
-_PYB_IK_CTX: dict = {}
 
+def current_joint_seed(config: Config = DEFAULT_CONFIG) -> tuple[float, ...]:
+    """返回机器人当前实际关节角，作为 IK 链的起始种子。
 
-def _get_pyb_ik_context() -> dict | None:
-    """获取 PyBullet IK 所需资源，失败返回 None（回退到数值 IK）。"""
-    global _PYB_IK_CTX
-    if _PYB_IK_CTX:
-        return _PYB_IK_CTX
+    PyBullet 已连接且机器人已加载时读取实时关节状态；否则回退到 home_pose。
+
+    设计依据：IK 链必须从机器人**当前物理姿态**播种，而非固定的 home_pose。
+    否则每条命令都假设从 home 出发，规划轨迹起点会脱离机器人实际位置，
+    导致段间巨大跳变 / 落入远分支（详见 controller 调试经验）。
+    """
+    fallback = tuple(config.home_pose[:6])
     try:
         from src.simulation._runtime import RUNTIME, p
     except ImportError:
-        return None
+        return fallback
     if p is None:
-        return None
+        return fallback
     robot_id = RUNTIME.robot_id
     client_id = RUNTIME.client_id
-    if robot_id is None or client_id is None:
-        return None
+    if robot_id is None or client_id is None or not RUNTIME.joint_indices:
+        return fallback
     if not p.isConnected(client_id):
-        return None
-    # 找到 tool0 (优先) 或 ee_link 的 link 索引
-    ee_idx = None
-    joint_indices = []
-    num = p.getNumJoints(robot_id, physicsClientId=client_id)
-    for j in range(num):
-        info = p.getJointInfo(robot_id, j, physicsClientId=client_id)
-        link_name = info[12].decode("utf-8")
-        joint_type = info[2]
-        if joint_type in {p.JOINT_REVOLUTE, p.JOINT_PRISMATIC}:
-            joint_indices.append(j)
-        if link_name == "tool0" and ee_idx is None:
-            ee_idx = j
-    if ee_idx is None:
-        # fallback: 最后一个 revolute 关节的 link (wrist_3_link)
-        ee_idx = num - 5  # 跳过固定关节
-    _PYB_IK_CTX = {
-        "p": p,
-        "robot_id": robot_id,
-        "client_id": client_id,
-        "ee_idx": ee_idx,
-        "joint_indices": tuple(joint_indices),
-    }
-    return _PYB_IK_CTX
+        return fallback
+    try:
+        return tuple(
+            p.getJointState(robot_id, j, physicsClientId=client_id)[0]
+            for j in RUNTIME.joint_indices[:6]
+        )
+    except Exception:
+        return fallback
 
 
 def solve_ik(
@@ -58,133 +44,20 @@ def solve_ik(
 ) -> tuple[float, ...]:
     """Solve UR5 inverse kinematics for a target point.
 
-    优先使用 PyBullet 内置 IK（保证与 URDF 运动学一致），
-    失败或不可用时回退到数值 IK（使用正确 FK 的 Jacobian 迭代法）。
+    统一使用确定性数值 IK（damped least squares + 零空间朝向优化）。
+
+    为什么不用 PyBullet 内置 IK：`calculateInverseKinematics` 以机器人**实时
+    关节状态**作迭代种子（非确定），且只能验证位置无法保证朝向 → 同一目标在
+    不同物理姿态下给出不同/吸盘倾斜的解，是「第二步走棋位姿失控」的根因。
+    数值 IK 是 (target, seed) 的纯函数、链式连续、强制 -zz>0.92 竖直，且其 FK
+    用 `_solve_fk_urdf_chain` 与 URDF 精确一致——已覆盖 PyBullet IK 的唯一卖点。
 
     Args:
         target_xyz: 目标 EE 世界坐标
         config: 配置对象
         seed: 可选的初始关节猜测（6 元组），用于确保邻近路径点的解分支连续性
     """
-    pyb_solution = _solve_ik_pybullet(target_xyz, config, seed=seed)
-    if pyb_solution is not None:
-        return pyb_solution
-
-    # ── 数值 IK fallback ──
     return _solve_ik_numerical(target_xyz, config, seed=seed)
-
-
-def _solve_ik_pybullet(
-    target_xyz: tuple[float, float, float],
-    config: Config = DEFAULT_CONFIG,
-    *,
-    seed: tuple[float, ...] | None = None,
-) -> tuple[float, ...] | None:
-    """使用 PyBullet 内置 IK 求解，保证与 URDF 模型运动学一致。
-
-    增强稳定性：
-    - 优先使用 DLS solver（对奇异位形更鲁棒）
-    - 失败时尝试 SDLS solver
-    - 如果带姿态约束失败，尝试仅位置 IK
-    - seed 参数提供初始关节猜测，确保邻近点解分支连续
-    """
-    ctx = _get_pyb_ik_context()
-    if ctx is None:
-        return None
-
-    p = ctx["p"]
-    robot_id = ctx["robot_id"]
-    client_id = ctx["client_id"]
-    ee_idx = ctx["ee_idx"]
-    joint_indices = ctx["joint_indices"]
-
-    # 目标在世界坐标系下的位置（PyBullet IK 使用世界坐标）
-    target_pos = [target_xyz[0], target_xyz[1], target_xyz[2]]
-
-    # 工具姿态：绕 x 轴转 -π/2，使 tool0 的 z 轴指向世界 -z（竖直向下）
-    # tool0 本地 z 轴 = wrist_3 的 y 轴 = (0, 1, 0)（由固定关节 rpy=(-π/2,0,0) 决定）
-    # Rx(-π/2) · (0, 1, 0) = (0, 0, -1) ✓
-    # 提供多个绕 z 轴旋转的朝向变体，增强末端可达区域（如 E1）的 IK 成功率
-    orn_variants = [
-        p.getQuaternionFromEuler((-math.pi / 2, 0.0, 0.0)),       # 默认：竖直向下
-        p.getQuaternionFromEuler((-math.pi / 2, 0.0, math.pi / 4)),  # +45° 绕 z
-        p.getQuaternionFromEuler((-math.pi / 2, 0.0, -math.pi / 4)), # -45° 绕 z
-        p.getQuaternionFromEuler((-math.pi / 2, 0.0, math.pi / 2)),  # +90° 绕 z
-    ]
-
-    # restPoses 使用 seed（如果提供）或 home_pose
-    rest_poses = list(seed) if seed is not None else list(config.home_pose[:6])
-
-    # 尝试多种 solver 组合
-    strategies = [
-        # (solver, use_orientation, rest_poses, joint_damping)
-        (getattr(p, "IK_DLS", None), True, rest_poses, None),
-        (getattr(p, "IK_SDLS", None), True, rest_poses, None),
-        (getattr(p, "IK_DLS", None), False, rest_poses, None),
-    ]
-
-    for solver, use_orn, rest_poses, damping in strategies:
-        # 朝向约束 solver：遍历多个朝向变体
-        # 仅位置 solver：只试一次
-        target_orns = orn_variants if use_orn else [None]
-        for target_orn in target_orns:
-            try:
-                kwargs = {
-                    "lowerLimits": [-math.pi] * 6,
-                    "upperLimits": [math.pi] * 6,
-                    "jointRanges": [2.0 * math.pi] * 6,
-                    "restPoses": rest_poses,
-                    "physicsClientId": client_id,
-                }
-                if solver is not None:
-                    kwargs["solver"] = solver
-                if damping is not None:
-                    kwargs["jointDamping"] = [damping] * 6
-
-                if use_orn:
-                    kwargs["targetOrientation"] = target_orn
-
-                joint_angles = p.calculateInverseKinematics(
-                    robot_id, ee_idx, target_pos, **kwargs
-                )
-
-                if len(joint_angles) >= 6:
-                    result = tuple(round(_wrap_to_pi(joint_angles[i]), 4) for i in range(6))
-                    # 验证解的正确性：使用 PyBullet FK 反算 EE 位置
-                    if _validate_ik_solution_pybullet(ctx, result, target_xyz, config, tolerance=0.01):
-                        # 仅位置 IK：应用零空间朝向优化，使 tool0 z 轴尽量竖直向下
-                        if not use_orn:
-                            result = _nullspace_optimize_orientation(result, target_xyz, config)
-                        return result
-                    # 验证未通过，继续尝试下一个策略
-            except Exception:
-                continue
-
-    # 所有 PyBullet 策略都失败，回退到数值 IK
-    return None
-
-
-def _validate_ik_solution_pybullet(
-    ctx: dict,
-    joint_angles: tuple[float, ...],
-    target_xyz: tuple[float, float, float],
-    config: Config,
-    tolerance: float = 0.05,
-) -> bool:
-    """使用 PyBullet FK 验证 IK 解是否使 EE 到达目标附近。"""
-    try:
-        from src.control.fk_solver import _solve_fk_pybullet
-        ee = _solve_fk_pybullet(joint_angles)
-        if ee is None:
-            return True  # 无法验证，假定正确
-        error = math.sqrt(
-            (ee[0] - target_xyz[0]) ** 2
-            + (ee[1] - target_xyz[1]) ** 2
-            + (ee[2] - target_xyz[2]) ** 2
-        )
-        return error <= tolerance
-    except Exception:
-        return True  # 验证失败，假定正确
 
 
 def is_reachable(target_xyz: tuple[float, float, float], config: Config = DEFAULT_CONFIG) -> bool:

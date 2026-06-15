@@ -64,6 +64,23 @@ def load_robot(urdf_path: str | None = None) -> RobotHandle:
     RUNTIME.robot_id = robot_id
     RUNTIME.end_effector_id = end_effector_id
     RUNTIME.joint_indices = tuple(joint_indices)
+
+    # ── 初始化关节到 home_pose ──
+    # 消除「机器人加载后停在全零奇异位形」的问题：全零位形会让 IK 链的
+    # 当前姿态种子落在奇异点，且第一条命令从全零驱动会扫过大空间。
+    # 设到 home_pose 后第一条命令从已知抬高姿态平滑出发。
+    home = Config.home_pose[:6]
+    for idx, joint_index in enumerate(joint_indices[:6]):
+        p.resetJointState(robot_id, joint_index, home[idx], physicsClientId=client_id)
+        # 位置电机保持 home_pose，避免重力下垂
+        p.setJointMotorControl2(
+            robot_id, joint_index,
+            controlMode=p.POSITION_CONTROL,
+            targetPosition=home[idx],
+            force=800,
+            physicsClientId=client_id,
+        )
+
     return RobotHandle(robot_id=robot_id, end_effector_id=end_effector_id, joint_indices=tuple(joint_indices))
 
 

@@ -13,8 +13,26 @@ from src.simulation.attachment import sync_manual_attachments
 # Reproducible noise seed so demos look stable across runs
 _RANDOM = random.Random(42)
 
-# 标志：确保机械臂关节只初始化一次（避免每次 trajectory 段都 teleport）
-_INITIALIZED = False
+# ── 流式执行参数 ──
+# 核心模型：恒定速度跟踪。每个 waypoint 的步数 = 关节距离 / 每步预算，
+# 使运动速度恒定、与 waypoint 疏密无关：
+#   - 密集插值的中间 waypoint（~0.05rad）→ 少步 → 连续流过，不停顿；
+#   - 大间隙（如 home→首个 approach，可达 3+rad）→ 多步 → 平滑总体运动；
+#   - 每段末 waypoint → 至少沉降 _SETTLE_STEPS，保证 attach/detach 精度。
+# 这避免了「逐点固定 80/160 步沉降」模型 94% 仿真步原地空等导致的肉眼卡顿，
+# 也避免了「固定少步」无法跨越大间隙（首段飞不到位）的问题。
+_STREAM_STEPS_MIN = 4      # 每个中间 waypoint 的最小步数
+_STREAM_STEPS_CAP = 240    # 单个 waypoint 步数上限（防止极端间隙卡死）
+_SETTLE_STEPS = 150        # 每段末 waypoint 的沉降步数上限（条件式提前退出）
+_SETTLE_TOLERANCE = 0.004  # 沉降收敛阈值（rad）：所有关节误差 < 此值即提前结束
+_MAX_VELOCITY_FAST = 4.0
+_MAX_VELOCITY_SAFE = 2.5
+# 每步关节预算（rad/step）：取 maxVelocity 的一个保守比例 / 240Hz，
+# 让 PD 在该步数内能实际跟上恒定速度的 target。
+_STEP_BUDGET_FRACTION = 0.6
+_POSITION_GAIN = 0.6
+_VELOCITY_GAIN = 1.0
+_MOTOR_FORCE = 800
 
 # 可选回调：在每个 waypoint 仿真步进后调用，用于保持 GUI 事件循环活跃
 _pump_callback: Callable[[], None] | None = None
@@ -85,14 +103,10 @@ def execute_trajectory(
         )
 
     # ── PyBullet integration ──
+    # 不再 teleport 初始化：轨迹首点已由规划层从机器人**当前实际姿态**播种
+    # （见 trajectory_planner.current_joint_seed），机器人从当前位置平滑驱动
+    # 到首 waypoint，无瞬移。
     _pyb = _get_pybullet_context()
-
-    # 初始化：仅在首次调用时将机械臂关节重置到轨迹起点
-    # 后续调用跳过，因为上一段轨迹的终点就是下一段的起点
-    global _INITIALIZED
-    if _pyb is not None and desired and not _INITIALIZED:
-        _init_joint_state(_pyb, desired[0])
-        _INITIALIZED = True
 
     actual: list[tuple[float, ...]] = []
     joint_errors: list[float] = []
@@ -109,9 +123,10 @@ def execute_trajectory(
         )
 
         if _pyb is not None:
-            # ── real PyBullet joint control ──
+            # ── real PyBullet joint control（流式：中间少步，段末沉降）──
+            is_last = (i == len(desired) - 1)
             actual_waypoint, step_time = _execute_pybullet_step(
-                _pyb, waypoint, mode, fast_step_time, safe_step_time,
+                _pyb, waypoint, mode, is_last,
             )
         else:
             # ── mock noise model ──
@@ -174,69 +189,6 @@ class _PyBulletContext:
     joint_indices: tuple[int, ...]
 
 
-def _init_joint_state(ctx: _PyBulletContext, waypoint: tuple[float, ...]) -> None:
-    """快速将机械臂传送到轨迹起点，沉降期间暂停棋子碰撞。
-
-    策略（经过 5 轮迭代确定的稳定方案）：
-    1. 临时将所有场景物体设为静态（mass=0），防止机械臂传送后
-       物理引擎因穿透施加分离力导致棋子炸飞
-    2. 用 resetJointState 瞬间传送关节（快速，不扫过空间）
-    3. 运行沉降步数让 PD 控制器稳定
-    4. 恢复场景物体质量
-    """
-    clamped = tuple(
-        _clamp_joint(waypoint[j], j) for j in range(len(waypoint))
-    )
-
-    # ── 临时冻结场景物体（mass=0），防止传送后穿透力炸飞棋子 ──
-    saved_masses: dict[int, float] = {}
-    for body_id in RUNTIME.scene_body_ids:
-        try:
-            dyn = p.getDynamicsInfo(body_id, -1, physicsClientId=ctx.client_id)
-            saved_masses[body_id] = dyn[0]
-            if dyn[0] > 0:
-                p.changeDynamics(body_id, -1, mass=0.0, physicsClientId=ctx.client_id)
-        except Exception:
-            pass
-
-    try:
-        # 设置电机目标并瞬间传送关节
-        for idx, joint_idx in enumerate(ctx.joint_indices):
-            p.setJointMotorControl2(
-                bodyUniqueId=ctx.robot_id,
-                jointIndex=joint_idx,
-                controlMode=p.POSITION_CONTROL,
-                targetPosition=clamped[idx],
-                targetVelocity=0.0,
-                force=1000,
-                maxVelocity=3.0,
-                positionGain=1.2,
-                velocityGain=0.8,
-                physicsClientId=ctx.client_id,
-            )
-        for idx, joint_idx in enumerate(ctx.joint_indices):
-            p.resetJointState(
-                ctx.robot_id, joint_idx,
-                targetValue=clamped[idx],
-                physicsClientId=ctx.client_id,
-            )
-
-        # 沉降步数（棋子已冻结，穿透不会产生力，步数可以减少）
-        for i in range(60):
-            p.stepSimulation(ctx.client_id)
-            sync_manual_attachments(ctx.client_id)
-            if _pump_callback is not None and i % 15 == 0:
-                _pump_callback()
-    finally:
-        # ── 恢复场景物体质量 ──
-        for body_id, mass in saved_masses.items():
-            if mass > 0:
-                try:
-                    p.changeDynamics(body_id, -1, mass=mass, physicsClientId=ctx.client_id)
-                except Exception:
-                    pass
-
-
 def _get_pybullet_context() -> _PyBulletContext | None:
     """Return a PyBullet context when the simulation is connected and ready."""
     if p is None:
@@ -259,22 +211,40 @@ def _execute_pybullet_step(
     ctx: _PyBulletContext,
     waypoint: tuple[float, ...],
     mode: str,
-    fast_step_time: float,
-    safe_step_time: float,
+    is_last: bool,
 ) -> tuple[tuple[float, ...], float]:
-    """Drive PyBullet joints toward *waypoint* and return actual joint angles + elapsed sim time."""
+    """流式驱动关节朝 *waypoint* 前进，返回实际关节角与本步耗时。
+
+    流式模型（取代逐点沉降）：
+    - 中间 waypoint：只步进少量步（fast 5 / safe 8），机器人连续流过不停顿；
+      因 waypoint 已被密集插值（0.03m），少步即可平滑过渡。
+    - 段末 waypoint（is_last）：沉降足够步数让 PD 收敛，保证 attach/detach 精度。
+
+    相比旧的「固定 target + 80/160 步」逐点沉降（94% 仿真步原地空等 → 肉眼卡顿），
+    流式执行消除空等、运动连续，且段末仍精确沉降。
+    """
     # Clamp target joint angles to UR5 limits
     clamped = tuple(
         _clamp_joint(waypoint[j], j) for j in range(len(waypoint))
     )
 
-    # 更高的增益和力矩以保证机械臂在重力下稳定跟踪轨迹
-    max_force = 1000 if mode == "fast" else 600
-    max_velocity = 10.0 if mode == "fast" else 5.0
-    position_gain = 1.2
-    velocity_gain = 0.8
+    max_velocity = _MAX_VELOCITY_FAST if mode == "fast" else _MAX_VELOCITY_SAFE
 
-    # Apply position control to all joints
+    # ── 自适应步数：按当前实际位置到目标的关节距离分配 ──
+    current = tuple(
+        p.getJointState(ctx.robot_id, j, physicsClientId=ctx.client_id)[0]
+        for j in ctx.joint_indices
+    )
+    max_delta = max(abs(clamped[k] - current[k]) for k in range(len(clamped)))
+    step_budget = max_velocity * _STEP_BUDGET_FRACTION / 240.0
+    adaptive = int(math.ceil(max_delta / step_budget)) if step_budget > 0 else _STREAM_STEPS_MIN
+    if is_last:
+        # 段末：取自适应步数与沉降步数的较大者，保证精度
+        sim_steps = min(_STREAM_STEPS_CAP, max(adaptive, _SETTLE_STEPS))
+    else:
+        sim_steps = min(_STREAM_STEPS_CAP, max(adaptive, _STREAM_STEPS_MIN))
+
+    # Apply position control to all joints（目标设定一次，随后连续步进）
     for idx, joint_idx in enumerate(ctx.joint_indices):
         p.setJointMotorControl2(
             bodyUniqueId=ctx.robot_id,
@@ -282,23 +252,30 @@ def _execute_pybullet_step(
             controlMode=p.POSITION_CONTROL,
             targetPosition=clamped[idx],
             targetVelocity=0.0,
-            force=max_force,
+            force=_MOTOR_FORCE,
             maxVelocity=max_velocity,
-            positionGain=position_gain,
-            velocityGain=velocity_gain,
+            positionGain=_POSITION_GAIN,
+            velocityGain=_VELOCITY_GAIN,
             physicsClientId=ctx.client_id,
         )
 
-    # Step simulation to let joints settle toward targets
-    # 每 waypoint 增加步数（fast: 80, safe: 160），确保 PD 控制器能跟踪到位
-    sim_steps = 80 if mode == "fast" else 160
+    executed = 0
     for i in range(sim_steps):
         p.stepSimulation(ctx.client_id)
         sync_manual_attachments(ctx.client_id)
+        executed += 1
         # 每 20 步泵送一次 GUI，避免长时间阻塞导致窗口无响应
         if _pump_callback is not None and i % 20 == 0:
             _pump_callback()
-    sim_time = sim_steps * (1.0 / 240)
+        # 段末沉降：收敛即提前退出，避免到位后原地空等（消除卡顿与浪费）
+        if is_last and i >= _STREAM_STEPS_MIN:
+            cur = tuple(
+                p.getJointState(ctx.robot_id, j, physicsClientId=ctx.client_id)[0]
+                for j in ctx.joint_indices
+            )
+            if all(abs(cur[k] - clamped[k]) < _SETTLE_TOLERANCE for k in range(len(clamped))):
+                break
+    sim_time = executed * (1.0 / 240)
 
     # Read back actual joint positions
     actual = tuple(
@@ -362,12 +339,3 @@ def _clamp_joint(value: float, joint_index: int) -> float:
     """Clamp a joint angle to its UR5 limit range."""
     lo, hi = _JOINT_LIMITS[joint_index]
     return min(hi, max(lo, value))
-
-
-def reset_initialization() -> None:
-    """重置关节初始化标志，使下次 execute_trajectory 重新初始化关节。
-
-    在场景重新加载或手动复位机械臂后调用。
-    """
-    global _INITIALIZED
-    _INITIALIZED = False

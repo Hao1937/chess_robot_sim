@@ -7,6 +7,40 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
 
+def _position_ee_over_piece(piece_id: str) -> None:
+    """把机械臂末端定位到指定棋子上方（仅 PyBullet 模式；mock 模式为空操作）。
+
+    用于让 attach_piece 的 3cm 前置距离检查通过。通过 solve_ik 求解棋子位置的
+    关节角并 resetJointState 直接定位（测试场景，无需平滑轨迹）。
+    """
+    try:
+        from src.simulation._runtime import RUNTIME, p
+    except ImportError:
+        return
+    if p is None or RUNTIME.robot_id is None or not RUNTIME.joint_indices:
+        return
+    body_id = RUNTIME.piece_body_ids.get(piece_id)
+    if body_id is None:
+        return
+    from src.common.config import DEFAULT_CONFIG
+    from src.planning.ik_solver import solve_ik
+
+    piece_pos = p.getBasePositionAndOrientation(body_id, physicsClientId=RUNTIME.client_id)[0]
+    # 目标：吸盘尖端落在棋子顶面附近（z 抬高 grasp 高度）
+    target = (piece_pos[0], piece_pos[1], DEFAULT_CONFIG.z_grasp)
+    joints = solve_ik(target, DEFAULT_CONFIG, seed=DEFAULT_CONFIG.home_pose[:6])
+    for idx, j in enumerate(RUNTIME.joint_indices[:6]):
+        p.resetJointState(RUNTIME.robot_id, j, joints[idx], physicsClientId=RUNTIME.client_id)
+        # 同时把电机目标设到该解，否则 load_robot 设置的 home 保持电机会把机器人拉回
+        p.setJointMotorControl2(
+            RUNTIME.robot_id, j, p.POSITION_CONTROL,
+            targetPosition=joints[idx], force=800,
+            physicsClientId=RUNTIME.client_id,
+        )
+    for _ in range(30):
+        p.stepSimulation(RUNTIME.client_id)
+
+
 def chinese_rook_move() -> str:
     return chr(0x8f66) + chr(0x4e8c) + chr(0x5e73) + chr(0x4e03)
 
@@ -165,6 +199,9 @@ class ContractInterfaceTests(unittest.TestCase):
             speed_profile=["fast", "safe"],
         )
 
+        # attach_piece 有 3cm 前置距离检查（EE 必须在棋子正上方）。
+        # 真实 PyBullet 下需先把 EE 定位到棋子位置；mock 下 _position_ee_over_piece 为空操作。
+        _position_ee_over_piece("red_rook_1")
         attach_result = attach_piece(piece_id="red_rook_1", end_effector_id=robot.end_effector_id)
         detach_result = detach_piece(piece_id="red_rook_1")
         execution = execute_trajectory(trajectory)
@@ -550,45 +587,55 @@ class ContractInterfaceTests(unittest.TestCase):
 
     # ── Bug 修复验证测试 ──
 
-    def test_execute_trajectory_only_initializes_joints_once(self):
-        """Bug 1: 多次 execute_trajectory 调用不应重复初始化关节（teleport）。
+    def test_numerical_ik_is_deterministic(self):
+        """根因修复：IK 必须是 (target, seed) 的纯函数（确定）。
 
-        验证 _init_joint_state 仅在首次调用时执行，后续调用跳过，
-        避免每次轨迹段都 teleport 到起点。
+        旧 PyBullet IK 以机器人实时姿态作迭代种子，同一目标在不同物理姿态下
+        给出不同/吸盘倾斜的解，是「第二步走棋位姿失控」的根因。统一为数值 IK 后，
+        同 target+seed 多次调用必须返回完全一致的结果。
         """
-        from unittest.mock import patch, MagicMock
+        from src.common.config import DEFAULT_CONFIG
+        from src.planning.ik_solver import solve_ik
+
+        seed = DEFAULT_CONFIG.home_pose[:6]
+        for target in [(0.3, -0.1, 0.1), (0.4, 0.0, 0.06), (0.2, -0.3, 0.18)]:
+            r1 = solve_ik(target, DEFAULT_CONFIG, seed=seed)
+            r2 = solve_ik(target, DEFAULT_CONFIG, seed=seed)
+            self.assertEqual(r1, r2, f"IK 对 {target} 应确定（同 seed 结果一致）")
+            self.assertEqual(len(r1), 6)
+
+    def test_current_joint_seed_returns_six_floats(self):
+        """current_joint_seed 始终返回 6 元组（PyBullet 连接时读实时关节，否则回退 home）。"""
+        from src.common.config import DEFAULT_CONFIG
+        from src.planning.ik_solver import current_joint_seed
+
+        seed = current_joint_seed(DEFAULT_CONFIG)
+        self.assertEqual(len(seed), 6)
+        self.assertTrue(all(isinstance(v, float) for v in seed))
+
+    def test_execute_trajectory_returns_aligned_result(self):
+        """流式执行：execute_trajectory 返回的各列表长度与 waypoint 数对齐。
+
+        替代已移除的 teleport-once 测试（_init_joint_state/reset_initialization 已删）。
+        """
         from src.common.types import JointTrajectory
-        from src.control.controller import execute_trajectory, reset_initialization
+        from src.control.controller import execute_trajectory
 
         trajectory = JointTrajectory(
-            joint_waypoints=[(0.0, 0.0, 0.0, 0.0, 0.0, 0.0)],
-            speed_profile=["fast"],
+            joint_waypoints=[
+                (0.0, 0.1, 0.2, -0.3, 0.4, 0.5),
+                (0.05, 0.15, 0.25, -0.35, 0.35, 0.55),
+                (0.1, 0.2, 0.3, -0.4, 0.3, 0.6),
+            ],
+            speed_profile=["fast", "fast", "safe"],
         )
-
-        mock_ctx = MagicMock()
-        mock_ctx.robot_id = 1
-        mock_ctx.client_id = 0
-        mock_ctx.joint_indices = (0, 1, 2, 3, 4, 5)
-
-        with patch("src.control.controller._get_pybullet_context", return_value=mock_ctx):
-            with patch("src.control.controller._init_joint_state") as mock_init:
-                with patch("src.control.controller._execute_pybullet_step",
-                           return_value=((0.0, 0.0, 0.0, 0.0, 0.0, 0.0), 0.1)):
-                    # 首次调用 — 应初始化
-                    execute_trajectory(trajectory)
-                    self.assertEqual(mock_init.call_count, 1,
-                                     "首次 execute_trajectory 应调用 _init_joint_state")
-
-                    # 第二次调用 — 不应初始化
-                    execute_trajectory(trajectory)
-                    self.assertEqual(mock_init.call_count, 1,
-                                     "第二次 execute_trajectory 不应再次调用 _init_joint_state")
-
-                    # 重置后调用 — 应再次初始化
-                    reset_initialization()
-                    execute_trajectory(trajectory)
-                    self.assertEqual(mock_init.call_count, 2,
-                                     "reset_initialization 后应再次调用 _init_joint_state")
+        result = execute_trajectory(trajectory)
+        n = len(trajectory.joint_waypoints)
+        self.assertTrue(result.success)
+        self.assertEqual(len(result.actual_joint_angles), n)
+        self.assertEqual(len(result.joint_errors), n)
+        self.assertEqual(len(result.end_effector_errors), n)
+        self.assertEqual(len(result.obstacle_clearances), n)
 
     def test_ik_solver_yields_downward_orientation_at_e1(self):
         """Bug 2: E1 位置的 IK 解应使 tool0 z 轴接近竖直向下。
