@@ -5,6 +5,28 @@ import math
 from src.common.types import CollisionCheckResult, Obstacle, ObstacleShape
 
 
+def _obstacle_spans_z(obstacle: Obstacle, z: float) -> bool:
+    """判断障碍物的垂直范围是否包含给定的 z 高度。
+
+    用于 2D 碰撞检测的 z 轴过滤——只将与当前飞行高度有交集的
+    障碍物纳入检测，避免低矮棋子阻挡高空 transfer 路径。
+    """
+    shape = obstacle.shape
+    cz = obstacle.center_xyz[2]
+
+    if shape == ObstacleShape.FLOATING_SPHERE:
+        return abs(z - cz) <= obstacle.radius
+    elif shape == ObstacleShape.FLOATING_CUBE:
+        return abs(z - cz) <= obstacle.radius  # radius = 半边长（含 z 方向）
+    elif shape == ObstacleShape.VERTICAL_CYLINDER:
+        bottom = cz                      # 圆柱底面
+        top = cz + obstacle.height       # 圆柱顶面
+        return bottom <= z <= top
+    else:
+        # HORIZONTAL_CYLINDER / AABB / 未知：保守处理，始终纳入
+        return True
+
+
 def check_segment_collision(
     start_xyz: tuple[float, float, float],
     end_xyz: tuple[float, float, float],
@@ -44,16 +66,18 @@ def check_segment_collision(
         t = i / (n_steps - 1)
         px = sx + t * dx
         py = sy + t * dy
-        # z 坐标同步采样（用于将来 3D 扩展，当前 2D 检测）
-        _pz = sz + t * dz
+        pz = sz + t * dz
 
         for obstacle in obstacles:
+            # z 轴过滤：只检测与当前采样高度有交集的障碍物
+            if not _obstacle_spans_z(obstacle, pz):
+                continue
             clearance = _point_obstacle_clearance(px, py, obstacle)
             if clearance <= safety_margin:
                 return CollisionCheckResult(
                     collision_free=False,
                     min_clearance=clearance,
-                    collision_point=(px, py, _pz),
+                    collision_point=(px, py, pz),
                 )
             if clearance < min_clearance:
                 min_clearance = clearance

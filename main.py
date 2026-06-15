@@ -185,11 +185,11 @@ def run_command(
 def run_demo(command_text: str = "A1 A2") -> dict[str, object]:
     """Run a mock one-shot pipeline through A/B/C/D interfaces."""
     config = DEFAULT_CONFIG
-    command = parse_command(command_text)
+    board = create_initial_board()                          # 先建棋盘（中文记谱需要）
+    command = parse_command(command_text, board=board)
     obstacle_mode = command.mode if command.command_type == "obstacle_mode" else "mode_1"
     robot = load_robot()
     scene = build_scene(config=config, obstacle_mode=obstacle_mode)
-    board = create_initial_board()
     return run_command(
         command,
         board,

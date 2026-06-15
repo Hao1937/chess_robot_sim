@@ -847,19 +847,20 @@ def _set_camera(config: Config, client_id: int) -> None:
 
 
 def build_obstacle_preset(obstacle_mode: str, config: Config = DEFAULT_CONFIG) -> list[Obstacle]:
-    """返回浮空小型障碍物预设（立方体 / 球体），供避障演示使用。
+    """返回浮空障碍物预设，供避障演示使用。
 
-    每个条目为 ``(shape, col, row, radius, z_offset)``：
-    - *shape*: ``"sphere"`` 或 ``"cube"``
+    每个条目为 ``(shape, col, row, radius, z_offset, height)``：
+    - *shape*: ``"sphere"``, ``"cube"``, ``"cylinder"``
     - *col*, *row*: 0‑based 棋盘格索引
-    - *radius*: 球体半径 / 立方体半边长
-    - *z_offset*: 障碍物中心相对于棋盘面的浮空高度
+    - *radius*: 球半径 / 立方体半边长 / 圆柱半径
+    - *z_offset*: 障碍物底面距棋盘面的浮空高度（圆柱）/ 中心浮空高度（球、立方体）
+    - *height*: 障碍物高度（圆柱的竖直跨度）；None 则自动取 2*radius
     """
-    presets: dict[str, list[tuple[str, int, int, float, float]]] = {
-        "mode_1": [("sphere", 2, 5, 0.030, 0.10)],           # 浮空小球 @ C6
-        "mode_2": [("cube",   4, 4, 0.030, 0.08)],           # 浮空小立方体 @ E5
-        "mode_3": [("sphere", 1, 5, 0.025, 0.10),            # 球体 @ B6
-                   ("cube",   4, 5, 0.025, 0.10)],           # 立方体 @ E6（门形）
+    presets: dict[str, list[tuple[str, int, int, float, float, float | None]]] = {
+        "mode_1": [("cylinder", 2, 5, 0.003, 0.06, 0.22)],    # 极细浮空圆柱 @ C5
+        "mode_2": [("cube",     4, 4, 0.030, 0.08, None)],     # 浮空小立方体 @ E5
+        "mode_3": [("sphere",   1, 5, 0.025, 0.10, None),      # 球体 @ B6
+                   ("cube",     4, 5, 0.025, 0.10, None)],     # 立方体 @ E6（门形）
         "none": [],
     }
     cells = presets.get(obstacle_mode)
@@ -867,18 +868,34 @@ def build_obstacle_preset(obstacle_mode: str, config: Config = DEFAULT_CONFIG) -
         raise ValueError(f"unknown obstacle_mode: {obstacle_mode}")
 
     obstacles: list[Obstacle] = []
-    for index, (shape_key, col, row, radius, z_offset) in enumerate(cells):
-        shape = ObstacleShape.FLOATING_SPHERE if shape_key == "sphere" else ObstacleShape.FLOATING_CUBE
+    for index, (shape_key, col, row, radius, z_offset, height) in enumerate(cells):
+        if shape_key == "sphere":
+            shape = ObstacleShape.FLOATING_SPHERE
+        elif shape_key == "cube":
+            shape = ObstacleShape.FLOATING_CUBE
+        else:
+            shape = ObstacleShape.VERTICAL_CYLINDER
+
+        if height is None:
+            height = radius * 2.0
+
+        if shape_key == "cylinder":
+            # 圆柱：center_xyz.z = 底面位置 = z_board + z_offset
+            center_z = config.z_board + z_offset
+        else:
+            # 球体/立方体：center_xyz.z = 中心位置 = z_board + z_offset
+            center_z = config.z_board + z_offset
+
         obstacles.append(
             Obstacle(
                 obstacle_id=f"preset_{shape_key}_{index + 1}",
                 center_xyz=(
                     config.board_origin[0] + col * config.cell_size,
                     config.board_origin[1] + row * config.cell_size,
-                    config.z_board + z_offset,   # 浮空：中心在棋盘面上方
+                    center_z,
                 ),
                 radius=radius,
-                height=radius * 2.0,             # 语义高度 = 直径/边长
+                height=height,
                 dynamic=False,
                 shape=shape,
             )

@@ -6,7 +6,7 @@ import time
 
 from src.common.config import DEFAULT_CONFIG, Config
 from src.common.types import Obstacle, ObstacleShape, PathSearchResult
-from src.planning.collision_checker import direct_path_clear, check_segment_collision_multi_z
+from src.planning.collision_checker import direct_path_clear, check_segment_collision_multi_z, _obstacle_spans_z
 
 
 # A* 8-邻域方向：(dx, dy, cost)
@@ -46,6 +46,9 @@ def build_2d_occupancy_grid(
     grid = [[False] * cols for _ in range(rows)]
 
     for obstacle in obstacles:
+        # z 轴过滤：只标记与投影平面有交集的障碍物
+        if not _obstacle_spans_z(obstacle, z_plane):
+            continue
         _mark_obstacle_on_grid(grid, obstacle, bounds, resolution, safety_margin)
 
     return grid

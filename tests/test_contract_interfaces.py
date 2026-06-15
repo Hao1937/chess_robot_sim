@@ -242,14 +242,14 @@ class ContractInterfaceTests(unittest.TestCase):
         mode_2 = build_obstacle_preset("mode_2", DEFAULT_CONFIG)
         mode_3 = build_obstacle_preset("mode_3", DEFAULT_CONFIG)
 
-        self.assertEqual(cells_for("mode_1"), [(2, 5)])
-        self.assertEqual(cells_for("mode_2"), [(4, 4)])
-        self.assertEqual(cells_for("mode_3"), [(1, 5), (4, 5)])
-        # 浮空球体/立方体：radius = 半边长/球半径，height = 直径/边长
-        self.assertTrue(all(obstacle.radius == 0.030 for obstacle in mode_1))
+        self.assertEqual(cells_for("mode_1"), [(2, 4)])       # C5 — 细圆柱
+        self.assertEqual(cells_for("mode_2"), [(4, 4)])       # E5 — 立方体
+        self.assertEqual(cells_for("mode_3"), [(1, 5), (4, 5)])  # B6+E6
+        # mode_1：细圆柱 r=0.012 h=0.22 | mode_2：立方体 r=0.03 h=0.06 | mode_3：球+方 r=0.025 h=0.05
+        self.assertTrue(all(obstacle.radius == 0.012 for obstacle in mode_1))
         self.assertTrue(all(obstacle.radius == 0.030 for obstacle in mode_2))
         self.assertTrue(all(obstacle.radius == 0.025 for obstacle in mode_3))
-        self.assertTrue(all(obstacle.height == 0.060 for obstacle in mode_1))
+        self.assertTrue(all(obstacle.height == 0.22 for obstacle in mode_1))
         self.assertTrue(all(obstacle.height == 0.060 for obstacle in mode_2))
         self.assertTrue(all(obstacle.height == 0.050 for obstacle in mode_3))
 

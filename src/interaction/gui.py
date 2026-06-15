@@ -1,12 +1,12 @@
 from __future__ import annotations
 
+import sys
 from typing import TYPE_CHECKING, Callable
 
 if TYPE_CHECKING:
     from src.interaction.board_gui import BoardGUI
 
 from src.common.types import BoardState, MoveCommand
-from src.interaction.chinese_notation import parse_chinese_move
 from src.interaction.cli import parse_command
 
 
@@ -72,28 +72,27 @@ def poll_gui_command(board: BoardState, input_func: InputFunc = input, prompt: s
 
         # Non-blocking check for stdin (terminal text commands)
         if sys.stdin.isatty():
-            # Windows: use msvcrt; Unix: use select
             try:
                 import msvcrt
                 if msvcrt.kbhit():
-                    raw = msvcrt.getche().decode('utf-8', errors='replace')
-                    # Accumulate a line (crude but workable for short commands)
-                    line = raw
-                    # Read rest of buffered chars
+                    # 用 getwch() 读宽字符（Windows 控制台内部 UTF-16），
+                    # 避免 getch() 字节流在中英文编码间出错（GBK vs UTF-8）
+                    chars: list[str] = []
                     while msvcrt.kbhit():
-                        ch = msvcrt.getche().decode('utf-8', errors='replace')
+                        ch = msvcrt.getwch()  # 宽字符，不回显（IME 自行处理）
                         if ch in ('\r', '\n'):
                             break
-                        line += ch
-                    line = line.rstrip('\r\n').strip()
+                        chars.append(ch)
+                    line = ''.join(chars).strip()
                     if not line:
                         return None
                     if line.lower() in {"quit", "exit"}:
                         return MoveCommand(command_type="quit")
                     try:
-                        return parse_command(line)
-                    except ValueError:
-                        return parse_chinese_move(line, board)
+                        return parse_command(line, board=board)
+                    except ValueError as exc:
+                        print(f"error: {exc}", file=sys.stderr)
+                        return None
             except ImportError:
                 # Unix fallback
                 rlist, _, _ = select.select([sys.stdin], [], [], 0)
@@ -104,9 +103,10 @@ def poll_gui_command(board: BoardState, input_func: InputFunc = input, prompt: s
                     if text.lower() in {"quit", "exit"}:
                         return MoveCommand(command_type="quit")
                     try:
-                        return parse_command(text)
-                    except ValueError:
-                        return parse_chinese_move(text, board)
+                        return parse_command(text, board=board)
+                    except ValueError as exc:
+                        print(f"error: {exc}", file=sys.stderr)
+                        return None
 
         return None
 
@@ -118,6 +118,7 @@ def poll_gui_command(board: BoardState, input_func: InputFunc = input, prompt: s
         return MoveCommand(command_type="quit")
 
     try:
-        return parse_command(text)
-    except ValueError:
-        return parse_chinese_move(text, board)
+        return parse_command(text, board=board)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return None
