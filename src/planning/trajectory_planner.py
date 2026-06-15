@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import math
+
 from src.common.config import DEFAULT_CONFIG, Config
 from src.common.types import JointTrajectory, MotionPrimitive, Obstacle, PrimitivePlanningContext
 from src.planning.collision_checker import direct_path_clear
-from src.planning.ik_solver import solve_ik
+from src.planning.ik_solver import is_reachable, solve_ik
 from src.planning.path_search import a_star_2d
 from src.planning.trajectory_smoother import (
     interpolate_waypoints_cartesian,
@@ -173,7 +175,19 @@ def _plan_horizontal_segment(
             speed_profile.extend(["safe"] * len(new_points))
             return
 
-    # 直接路径（无障碍或 A* 失败 fallback）
+        # A* 失败 → 尝试 3D 飞越障碍物
+        if _try_overfly_horizontal(
+            (start_xy[0], start_xy[1], z_plane),
+            end_xyz,
+            primitive_obstacles,
+            config,
+            cartesian_waypoints,
+            speed_profile,
+            enable_interpolation,
+        ):
+            return
+
+    # 直接路径（无障碍或 overfly 失败 fallback）
     _append_with_interpolation(
         prev, end_xyz,
         cartesian_waypoints, speed_profile,
@@ -224,3 +238,109 @@ def _append_with_interpolation(
     # 无法插值或第一个点：直接添加
     cartesian_waypoints.append(target)
     speed_profile.append(speed_mode)
+
+def _try_overfly_horizontal(
+    start_xyz: tuple[float, float, float],
+    end_xyz: tuple[float, float, float],
+    obstacles: list[Obstacle],
+    config: Config,
+    cartesian_waypoints: list,
+    speed_profile: list,
+    enable_interpolation: bool,
+) -> bool:
+    """Attempt 3D overfly when 2D A* fails.
+
+    Finds the tallest obstacle blocking the direct horizontal path,
+    calculates a safe overfly height above it, and adds rise/transfer/
+    descent waypoints.
+
+    Returns True if overfly succeeded (waypoints were added).
+    """
+    # Use the actual last waypoint as the rise start point
+    prev = cartesian_waypoints[-1] if cartesian_waypoints else None
+    if prev is None:
+        return False
+
+    start_xy = (prev[0], prev[1])
+    end_xy = (end_xyz[0], end_xyz[1])
+
+    # Sample the direct horizontal line for max blocking obstacle height
+    dx = end_xy[0] - start_xy[0]
+    dy = end_xy[1] - start_xy[1]
+    seg_length = math.hypot(dx, dy)
+
+    max_obstacle_height = 0.0
+    if seg_length < 1e-9:
+        px, py = start_xy
+        for obstacle in obstacles:
+            ox, oy = obstacle.center_xyz[0], obstacle.center_xyz[1]
+            dist = math.hypot(px - ox, py - oy)
+            if dist < obstacle.radius + config.safety_margin:
+                if obstacle.height > max_obstacle_height:
+                    max_obstacle_height = obstacle.height
+    else:
+        n_steps = max(2, int(math.ceil(seg_length / config.path_collision_check_step)) + 1)
+        for i in range(n_steps):
+            t = i / (n_steps - 1)
+            px = start_xy[0] + t * dx
+            py = start_xy[1] + t * dy
+            for obstacle in obstacles:
+                ox, oy = obstacle.center_xyz[0], obstacle.center_xyz[1]
+                dist = math.hypot(px - ox, py - oy)
+                if dist < obstacle.radius + config.safety_margin:
+                    if obstacle.height > max_obstacle_height:
+                        max_obstacle_height = obstacle.height
+
+    # Calculate overfly height
+    overfly_z = max_obstacle_height + config.obstacle_overfly_clearance
+    # Never fly lower than the target plane (prevents descending overfly)
+    if overfly_z <= end_xyz[2]:
+        return False
+
+    # Check reachability at overfly height
+    if not is_reachable((end_xy[0], end_xy[1], overfly_z), config):
+        return False
+
+    # Filter obstacles: only those taller than overfly_z matter at this height
+    filtered_obstacles = [
+        o for o in obstacles
+        if o.height >= overfly_z
+    ]
+
+    # Check horizontal clearance at overfly_z
+    if not direct_path_clear(
+        start_xy, end_xy, overfly_z, filtered_obstacles,
+        step_size=config.path_collision_check_step,
+        safety_margin=config.safety_margin,
+    ):
+        return False
+
+    # Add overfly waypoints: rise to overfly_z
+    rise_target = (prev[0], prev[1], overfly_z)
+    _append_with_interpolation(
+        prev, rise_target,
+        cartesian_waypoints, speed_profile,
+        enable_interpolation, config.waypoint_vertical_step,
+        speed_mode="safe",
+    )
+
+    # Horizontal transfer at overfly_z
+    actual_prev = cartesian_waypoints[-1]
+    transfer_target = (end_xy[0], end_xy[1], overfly_z)
+    _append_with_interpolation(
+        actual_prev, transfer_target,
+        cartesian_waypoints, speed_profile,
+        enable_interpolation, config.waypoint_interpolation_step,
+        speed_mode="safe",
+    )
+
+    # Descent to original target
+    actual_prev = cartesian_waypoints[-1]
+    _append_with_interpolation(
+        actual_prev, end_xyz,
+        cartesian_waypoints, speed_profile,
+        enable_interpolation, config.waypoint_vertical_step,
+        speed_mode="safe",
+    )
+
+    return True

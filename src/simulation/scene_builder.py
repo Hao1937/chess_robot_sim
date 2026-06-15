@@ -776,34 +776,46 @@ def _set_camera(config: Config, client_id: int) -> None:
 
 
 def build_obstacle_preset(obstacle_mode: str, config: Config = DEFAULT_CONFIG) -> list[Obstacle]:
-    """Return preset vertical cylinder obstacles for avoidance demos."""
+    """Return preset vertical cylinder obstacles for avoidance demos.
+
+    Each entry is a 3-tuple ``(col, row, height)`` where *col* and *row* are
+    0‑based board indices.  2‑tuple ``(col, row)`` is also accepted for backward
+    compatibility (defaults height to 0.30).
+    """
     presets = {
-        "mode_1": [(4, 5)],
-        "mode_2": [(2, 5), (5, 5)],
-        "mode_3": [(2, 5), (4, 6), (6, 5)],
+        "mode_1": [(2, 5, 0.34)],          # C6 — tall thin (must side‑detour)
+        "mode_2": [(4, 4, 0.24)],          # E5 — short wide (can overfly)
+        "mode_3": [(1, 5, 0.32), (4, 5, 0.32)],  # B6+E6 — gate
         "none": [],
     }
     radii = {
-        "mode_1": 0.05,
-        "mode_2": 0.025,
-        "mode_3": 0.045,
+        "mode_1": 0.03,
+        "mode_2": 0.06,
+        "mode_3": 0.04,
         "none": 0.0,
     }
     cells = presets.get(obstacle_mode)
     if cells is None:
         raise ValueError(f"unknown obstacle_mode: {obstacle_mode}")
     radius = radii[obstacle_mode]
-    return [
-        Obstacle(
-            obstacle_id=f"preset_column_{index + 1}",
-            center_xyz=(
-                config.board_origin[0] + col * config.cell_size,
-                config.board_origin[1] + row * config.cell_size,
-                config.z_board,
-            ),
-            radius=radius,
-            height=0.30,
-            dynamic=False,
+    obstacles: list[Obstacle] = []
+    for index, entry in enumerate(cells):
+        if len(entry) == 3:
+            col, row, height = entry
+        else:  # backward compat: 2‑tuple (col, row)
+            col, row = entry
+            height = 0.30
+        obstacles.append(
+            Obstacle(
+                obstacle_id=f"preset_column_{index + 1}",
+                center_xyz=(
+                    config.board_origin[0] + col * config.cell_size,
+                    config.board_origin[1] + row * config.cell_size,
+                    config.z_board,
+                ),
+                radius=radius,
+                height=height,
+                dynamic=False,
+            )
         )
-        for index, (col, row) in enumerate(cells)
-    ]
+    return obstacles

@@ -20,7 +20,7 @@ class Config:
     home_pose: tuple[float, ...] = (0.0, -0.8, 1.2, -0.4, 0.0, 0.0)
     fast_speed_scale: float = 1.0
     safe_speed_scale: float = 0.35
-    base_link_position: tuple[float, float, float] = (0.24, -0.25, 0.12)
+    base_link_position: tuple[float, float, float] = (0.24, -0.10, 0.12)
     base_link_orientation_rpy: tuple[float, float, float]=(0, 0, 0)
     human_hand_zone_col: int = 4
     human_hand_zone_row: int = 7
@@ -36,6 +36,11 @@ class Config:
     # ── Waypoint Interpolation ──
     waypoint_interpolation_step: float = 0.03  # 插值步长 (m) in Cartesian
     waypoint_vertical_step: float = 0.01       # 垂直方向插值步长 (m)
+
+    # ── Feasibility Validation ──
+    feasibility_pos_tol: float = 0.025       # FK 位置误差容忍度 (m)，PyBullet FK 有~2cm 固有误差
+    feasibility_zz_min: float = 0.55         # tool0 -zz 最小值（链式 IK 会累积退化至~0.59，仅拦截灾难性失败）
+    obstacle_overfly_clearance: float = 0.04 # 飞越障碍物顶部时的间隙 (m)
 
     @property
     def inflated_piece_radius(self) -> float:
