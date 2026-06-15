@@ -63,6 +63,12 @@ def run_command(
     })
     trajectory = plan_trajectory(planning_contexts, config=config)
 
+    # ── 可行性验证：在 attach 任何棋子之前检查轨迹是否安全可达 ──
+    from src.planning.feasibility import validate_trajectory_feasibility
+    ok, reason = validate_trajectory_feasibility(planning_contexts, trajectory, config)
+    if not ok:
+        raise ValueError(f"路线不可达，请移除障碍物：{reason}")
+
     # 按 action 分段执行，在 pick/place 对之间切换 attach/detach 目标。
     # 这样吃子时敌方棋子也能正确吸附跟随、到达 captured area 后释放，
     # 然后机械臂再去抓取己方棋子。

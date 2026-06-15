@@ -222,7 +222,7 @@ class ContractInterfaceTests(unittest.TestCase):
 
         self.assertEqual(command.command_type, "obstacle_mode")
         self.assertEqual(command.mode, "mode_2")
-        self.assertGreaterEqual(len(scene.obstacles), 2)
+        self.assertGreaterEqual(len(scene.obstacles), 1)
         self.assertTrue(all(obstacle.obstacle_id.startswith("preset_column_") for obstacle in scene.obstacles))
 
     def test_obstacle_presets_create_demo_gate_and_staggered_pressure_layout(self):
@@ -242,13 +242,15 @@ class ContractInterfaceTests(unittest.TestCase):
         mode_2 = build_obstacle_preset("mode_2", DEFAULT_CONFIG)
         mode_3 = build_obstacle_preset("mode_3", DEFAULT_CONFIG)
 
-        self.assertEqual(cells_for("mode_1"), [(4, 5)])
-        self.assertEqual(cells_for("mode_2"), [(2, 5), (5, 5)])
-        self.assertEqual(cells_for("mode_3"), [(2, 5), (4, 6), (6, 5)])
-        self.assertTrue(all(obstacle.radius == 0.05 for obstacle in mode_1))
-        self.assertTrue(all(obstacle.radius == 0.025 for obstacle in mode_2))
-        self.assertTrue(all(obstacle.radius == 0.045 for obstacle in mode_3))
-        self.assertTrue(all(obstacle.height == 0.30 for obstacle in mode_1 + mode_2 + mode_3))
+        self.assertEqual(cells_for("mode_1"), [(2, 5)])
+        self.assertEqual(cells_for("mode_2"), [(4, 4)])
+        self.assertEqual(cells_for("mode_3"), [(1, 5), (4, 5)])
+        self.assertTrue(all(obstacle.radius == 0.03 for obstacle in mode_1))
+        self.assertTrue(all(obstacle.radius == 0.06 for obstacle in mode_2))
+        self.assertTrue(all(obstacle.radius == 0.04 for obstacle in mode_3))
+        self.assertTrue(all(obstacle.height == 0.34 for obstacle in mode_1))
+        self.assertTrue(all(obstacle.height == 0.24 for obstacle in mode_2))
+        self.assertTrue(all(obstacle.height == 0.32 for obstacle in mode_3))
 
     def test_member_a_day_one_command_validation_edges(self):
         from src.interaction.cli import parse_command

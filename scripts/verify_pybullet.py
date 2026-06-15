@@ -63,7 +63,7 @@ def main_run() -> int:
 
     board = create_initial_board()
     robot = load_robot()
-    scene = build_scene(config=C, obstacle_mode="mode_1")
+    scene = build_scene(config=C, obstacle_mode="none")  # 无障碍回归测试，避免新障碍设计干扰
 
     # ── 检查 1：IK 确定性 + 朝向 ──
     # 测可靠工作区（第 1-9 行）。第 10 行离基座最远(~0.79m，接近 0.9m 极限)，
