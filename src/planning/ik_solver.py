@@ -81,6 +81,17 @@ _JOINT_LIMITS = [
 ]
 
 
+# 主种子收敛误差低于此值即采用，不再尝试备选种子（保住链式连续性 + 省时）
+_IK_RETRY_THRESHOLD = 0.02
+# 备选种子：覆盖不同 shoulder_pan/lift/elbow 分支，帮助跳出局部极小
+_FALLBACK_IK_SEEDS: tuple[tuple[float, ...], ...] = (
+    (0.0, -1.2, 1.8, -0.6, 0.0, 0.0),
+    (0.0, -2.0, 2.0, -1.5, 0.0, 0.0),
+    (0.5, -1.0, 1.5, -0.8, 0.0, 0.0),
+    (-0.5, -1.0, 1.5, -0.8, 0.0, 0.0),
+)
+
+
 def _solve_ik_numerical(
     target_xyz: tuple[float, float, float],
     config: Config = DEFAULT_CONFIG,
@@ -93,7 +104,11 @@ def _solve_ik_numerical(
     """Numerical IK using damped least squares Jacobian pseudo-inverse.
 
     使用 URDF 链 FK 保证与 PyBullet 模型完全一致。
-    从 seed（或 home pose）开始迭代，对奇异位形和关节极限具有鲁棒性。
+
+    多种子鲁棒性：先从 seed（或 home）下降；若收敛失败（best_error 偏大），
+    依次换备选种子重解，取 best_error 最小者。这消除了「链式种子陷入局部极小
+    → 返回偏差数 cm 的解 → 可行性闸门误判不可达」的问题。常见路径（主种子即收敛）
+    只跑一次下降，无额外开销。
 
     Args:
         target_xyz: target EE position in world frame
@@ -106,16 +121,56 @@ def _solve_ik_numerical(
     Returns:
         6 joint angles (rad), or seed/home_pose if no solution found
     """
-    from src.control.fk_solver import _solve_fk_urdf_chain, _get_tool0_z_axis
+    # 种子顺序：优先用传入 seed（保链式连续），再 home，再备选
+    seeds: list[tuple[float, ...]] = []
+    if seed is not None:
+        seeds.append(tuple(seed))
+    seeds.append(tuple(config.home_pose[:6]))
+    seeds.extend(_FALLBACK_IK_SEEDS)
 
-    # 初始猜测：seed（如果提供）或 home pose
-    theta = list(seed) if seed is not None else list(config.home_pose[:6])
+    best_theta: list[float] | None = None
+    best_error = float("inf")
+    for seed_i in seeds:
+        theta_i, err_i = _ik_descent(
+            target_xyz, config, seed_i, max_iters, tolerance, damping,
+        )
+        if err_i < best_error:
+            best_error = err_i
+            best_theta = theta_i
+        # 已足够好 → 直接采用（主种子命中时即此分支，零额外开销）
+        if best_error < _IK_RETRY_THRESHOLD:
+            break
 
+    # 收敛成功 → 朝向优化后返回
+    if best_theta is not None and best_error < 0.05:
+        return _nullspace_optimize_orientation(tuple(best_theta), target_xyz, config)
+
+    # 所有种子均未收敛：返回 seed（保轨迹连续）或 home_pose
+    if seed is not None:
+        return tuple(seed)
+    return config.home_pose[:6]
+
+
+def _ik_descent(
+    target_xyz: tuple[float, float, float],
+    config: Config,
+    theta0: tuple[float, ...],
+    max_iters: int,
+    tolerance: float,
+    damping: float,
+) -> tuple[list[float], float]:
+    """单次 DLS 下降（带零空间朝向优化方向），返回 (best_theta, best_error)。
+
+    不在此做最终朝向精修——由调用方对全局最优解统一做
+    ``_nullspace_optimize_orientation``，避免对每个种子重复精修。
+    """
+    from src.control.fk_solver import _solve_fk_urdf_chain
+
+    theta = list(theta0)
     best_theta = list(theta)
     best_error = float("inf")
 
-    for iteration in range(max_iters):
-        # 当前 EE 位置
+    for _ in range(max_iters):
         current = _solve_fk_urdf_chain(tuple(theta), config)
         error_vec = [
             target_xyz[0] - current[0],
@@ -124,28 +179,18 @@ def _solve_ik_numerical(
         ]
         error = math.sqrt(sum(e**2 for e in error_vec))
 
-        # 跟踪最佳解（同时考虑朝向）
         if error < best_error:
             best_error = error
             best_theta = list(theta)
 
         if error < tolerance:
-            # 位置收敛 — 运行零空间朝向优化后返回
-            result = _nullspace_optimize_orientation(tuple(theta), target_xyz, config)
-            return result
+            break
 
-        # 计算数值 Jacobian (3×6)
         J = _compute_jacobian(tuple(theta), config)
-
-        # Damped least squares: Δθ = J^T (J·J^T + λ²·I)⁻¹ · e
         delta_pos = _dls_step(J, error_vec, damping)
-
-        # ── Null-space orientation optimisation ──
-        # Compute orientation gradient and project into position null-space
         g_orient = _orientation_gradient(tuple(theta), config)
         delta_null = _nullspace_project(J, delta_pos, g_orient, damping)
 
-        # 更新关节角度并限制在范围内
         for j in range(6):
             theta[j] += delta_null[j]
             lo, hi = _JOINT_LIMITS[j]
@@ -159,18 +204,7 @@ def _solve_ik_numerical(
         else:
             damping = 0.05
 
-    # 返回最佳解（同样做零空间优化）
-    if best_error < 0.05:
-        result = _nullspace_optimize_orientation(tuple(best_theta), target_xyz, config)
-        return result
-
-    # IK 未收敛：返回 seed（前一个 waypoint 的解）而非 home_pose，
-    # 确保关节轨迹连续，避免大幅跳变导致机械臂旋转扫飞棋子。
-    # seed 指向的空间位置虽不精确，但相邻 waypoint 之间误差很小（~3cm），
-    # 在关节空间中连续跟踪不会产生剧烈运动。
-    if seed is not None:
-        return tuple(seed)
-    return config.home_pose[:6]
+    return best_theta, best_error
 
 
 def _compute_jacobian(

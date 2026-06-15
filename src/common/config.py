@@ -20,7 +20,7 @@ class Config:
     home_pose: tuple[float, ...] = (0.0, -0.8, 1.2, -0.4, 0.0, 0.0)
     fast_speed_scale: float = 1.0
     safe_speed_scale: float = 0.35
-    base_link_position: tuple[float, float, float] = (0.24, -0.10, 0.12)
+    base_link_position: tuple[float, float, float] = (0.24, -0.25, 0.12)
     base_link_orientation_rpy: tuple[float, float, float]=(0, 0, 0)
     human_hand_zone_col: int = 4
     human_hand_zone_row: int = 7

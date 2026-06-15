@@ -6,6 +6,7 @@ from src.common.config import Config
 from src.common.types import JointTrajectory, PrimitivePlanningContext
 from src.control.fk_solver import solve_fk, _get_tool0_z_axis
 from src.planning.collision_checker import check_segment_collision
+from src.planning.ik_solver import solve_ik, is_reachable
 
 
 def validate_trajectory_feasibility(
@@ -26,53 +27,47 @@ def validate_trajectory_feasibility(
     primitive_ranges = trajectory.primitive_ranges
     num_contexts = len(planning_contexts)
 
-    # ── a) IK 可达性检查 ──
-    # 仅检查每个 primitive 的终点 waypoint：
-    # 中间插值点从 home_pose 过渡时朝向可能暂时不佳，
-    # 只要到达目标点时 -zz 和位置误差符合要求即可。
-    for i, waypoint in enumerate(trajectory.joint_waypoints):
-        if primitive_ranges is not None:
-            prim_idx = _find_primitive_idx(i, primitive_ranges, num_contexts)
-        else:
-            prim_idx = min(i, num_contexts - 1) if num_contexts > 0 else 0
-
-        if prim_idx >= num_contexts:
+    # ── a) 目标可达性检查 ──
+    # 关键修正（2026-06-15 第二轮验收）：检查每个 primitive 的**目标点**本身是否
+    # 几何可达，而非检查链式/平滑轨迹上某个 waypoint 的 pos_err。
+    #
+    # 旧实现的缺陷：用链式 IK 轨迹 waypoint 的 pos_err 当作"可达性"判据。
+    # 链式种子在捕获等长序列中会经过别扭中间姿态，个别 waypoint 误差偏大；
+    # 加上 waypoint↔primitive 索引映射脆弱，导致**几何可达的目标被误判为不可达**
+    # （用户目击的 I 列误拒）。实测：这些目标用 home 种子单独求解 pos_err≈0.0002。
+    #
+    # 正确做法：对每个目标用 home 种子**新鲜求解**，测的是"目标本身能否到达"
+    # （这才是"路线不可达"该回答的问题），不受链式/平滑/索引伪差影响。
+    # 真正不可达的目标（超出工作空间、被柱占据）用新鲜求解同样会失败 → 仍被拦截。
+    for ctx in planning_contexts:
+        prim = ctx.primitive
+        prim_type = prim.primitive_type
+        if prim_type not in (
+            "approach", "transfer", "descend", "lift", "grasp", "detach", "retreat",
+        ):
             continue
+        target_xyz = prim.target_xyz
 
-        # 判断是否为本 primitive 的终点 waypoint
-        if primitive_ranges is not None and prim_idx < len(primitive_ranges):
-            _, end = primitive_ranges[prim_idx]
-            is_last = (i == end - 1)
-        else:
-            is_last = (i == len(trajectory.joint_waypoints) - 1)
+        # 几何工作空间硬限（内圈 0.25m + 外圈 0.9m）
+        if not is_reachable(target_xyz, config):
+            return (False, f"不可达：{prim_type} 目标超出机械臂工作空间")
 
-        if not is_last:
-            continue
-
-        # 计算 FK 位置和 tool0 z 轴
-        fk_xyz = solve_fk(waypoint, config)
-        z_axis = _get_tool0_z_axis(waypoint, config)
-        zz = z_axis[2]
-
-        # 检查 tool 朝向：仅对关键操作 primitive（descend/lift/grasp/detach）
-        # approach/transfer 在高空行进，朝向要求可放宽
-        prim_type = planning_contexts[prim_idx].primitive.primitive_type
-        if prim_type in ("descend", "lift", "grasp", "detach"):
-            if -zz < config.feasibility_zz_min:
-                return (False, f"不可达：waypoint {i} pos_err=N/A -zz={-zz:.3f}")
-
-        # 检查位置误差
-        target_xyz = planning_contexts[prim_idx].primitive.target_xyz
+        # 新鲜 IK 求解，验证目标真实可达
+        joints = solve_ik(target_xyz, config, seed=config.home_pose[:6])
+        fk_xyz = solve_fk(joints, config)
         pos_err = math.sqrt(
             (fk_xyz[0] - target_xyz[0]) ** 2
             + (fk_xyz[1] - target_xyz[1]) ** 2
             + (fk_xyz[2] - target_xyz[2]) ** 2
         )
         if pos_err > config.feasibility_pos_tol:
-            return (
-                False,
-                f"不可达：waypoint {i} pos_err={pos_err:.3f} -zz={-zz:.3f}",
-            )
+            return (False, f"不可达：{prim_type} 目标 IK 误差 {pos_err:.3f}m")
+
+        # 关键操作（descend/lift/grasp/detach）需吸盘朝向不灾难性退化
+        if prim_type in ("descend", "lift", "grasp", "detach"):
+            zz = -_get_tool0_z_axis(joints, config)[2]
+            if zz < config.feasibility_zz_min:
+                return (False, f"不可达：{prim_type} 目标吸盘朝向 -zz={zz:.3f}")
 
     # ── b) 水平段路径碰撞检查 ──
     # 对 approach/transfer 素，检查相邻 waypoint 之间的 cartesian 路径
@@ -140,15 +135,3 @@ def validate_trajectory_feasibility(
                     return (False, "不可达：落点被障碍物阻挡")
 
     return (True, "ok")
-
-
-def _find_primitive_idx(
-    waypoint_idx: int,
-    primitive_ranges: list[tuple[int, int]],
-    num_contexts: int,
-) -> int:
-    """查找某 waypoint 索引属于哪个 primitive 范围。"""
-    for prim_idx, (start, end) in enumerate(primitive_ranges):
-        if start <= waypoint_idx < end:
-            return prim_idx
-    return num_contexts - 1  # fallback

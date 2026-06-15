@@ -1302,7 +1302,11 @@ class ContractInterfaceTests(unittest.TestCase):
         self.assertEqual(optimize_jerk_minimum(short, ["safe"]), short)
 
     def test_plan_trajectory_accepts_new_enable_parameters(self):
-        """Backward-compat: plan_trajectory with new enable_* params defaults to old behaviour."""
+        """plan_trajectory 的 enable_* 开关可独立关闭，且产出结构一致。
+
+        注：实验性 enable_theta_star/cubic_spline/jerk_opt 已移除（已知数值缺陷，
+        见控制器修复交接）。本测试覆盖现存的 path_search/smoothing/interpolation 开关。
+        """
         from src.common.config import DEFAULT_CONFIG
         from src.common.types import LogicalAction
         from src.planning.motion_primitives import build_motion_primitives
@@ -1317,21 +1321,14 @@ class ContractInterfaceTests(unittest.TestCase):
         primitives = build_motion_primitives(actions, DEFAULT_CONFIG)
         traj_default = plan_trajectory(primitives, obstacles, DEFAULT_CONFIG)
         self.assertGreater(len(traj_default.joint_waypoints), 0)
+        self.assertEqual(len(traj_default.joint_waypoints), len(traj_default.speed_profile))
+
         traj_off = plan_trajectory(
             primitives, obstacles, DEFAULT_CONFIG,
-            enable_theta_star=False, enable_cubic_spline=False, enable_jerk_opt=False,
+            enable_path_search=False, enable_smoothing=False, enable_interpolation=False,
         )
-        self.assertEqual(len(traj_off.joint_waypoints), len(traj_default.joint_waypoints))
-        traj_spline = plan_trajectory(
-            primitives, obstacles, DEFAULT_CONFIG, enable_cubic_spline=True,
-        )
-        self.assertGreater(len(traj_spline.joint_waypoints), 0)
-        self.assertEqual(len(traj_spline.joint_waypoints), len(traj_spline.speed_profile))
-        traj_jerk = plan_trajectory(
-            primitives, obstacles, DEFAULT_CONFIG, enable_jerk_opt=True,
-        )
-        self.assertGreater(len(traj_jerk.joint_waypoints), 0)
-        self.assertEqual(len(traj_jerk.joint_waypoints), len(traj_jerk.speed_profile))
+        self.assertGreater(len(traj_off.joint_waypoints), 0)
+        self.assertEqual(len(traj_off.joint_waypoints), len(traj_off.speed_profile))
 
 
     # ── P2: Matplotlib Board GUI tests ──
