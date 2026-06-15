@@ -266,9 +266,37 @@ def _mark_obstacle_on_grid(
     """在占栅格上标记障碍物。按 shape 分派标记策略。"""
     if obstacle.shape == ObstacleShape.HORIZONTAL_CYLINDER:
         _mark_aabb_on_grid(grid, obstacle, bounds, resolution, safety_margin)
+    elif obstacle.shape == ObstacleShape.FLOATING_CUBE:
+        _mark_cube_aabb_on_grid(grid, obstacle, bounds, resolution, safety_margin)
     else:
-        # VERTICAL_CYLINDER 及默认：圆形膨胀
+        # VERTICAL_CYLINDER / FLOATING_SPHERE / AABB 及默认：圆形膨胀
         _mark_circle_on_grid(grid, obstacle, bounds, resolution, safety_margin)
+
+
+def _mark_cube_aabb_on_grid(
+    grid: list[list[bool]],
+    obstacle: Obstacle,
+    bounds: tuple[float, float, float, float],
+    resolution: float,
+    safety_margin: float,
+) -> None:
+    """标记轴对齐方形区域（浮空立方体 XY 投影）。
+
+    obstacle.radius = 半边长，无旋转，AABB = [cx±r, cy±r]。
+    """
+    xmin, xmax, ymin, ymax = bounds
+    rows, cols = len(grid), len(grid[0])
+    cx, cy = obstacle.center_xyz[0], obstacle.center_xyz[1]
+    half = obstacle.radius + safety_margin
+
+    gx_min = max(0, int((cx - half - xmin) / resolution))
+    gx_max = min(cols - 1, int((cx + half - xmin) / resolution))
+    gy_min = max(0, int((cy - half - ymin) / resolution))
+    gy_max = min(rows - 1, int((cy + half - ymin) / resolution))
+
+    for gy in range(gy_min, gy_max + 1):
+        for gx in range(gx_min, gx_max + 1):
+            grid[gy][gx] = True
 
 
 def _mark_circle_on_grid(

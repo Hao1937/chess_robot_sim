@@ -24,6 +24,8 @@ class ObstacleShape(str, Enum):
     VERTICAL_CYLINDER = "vertical_cylinder"    # 竖直圆柱（棋子、预设柱）
     HORIZONTAL_CYLINDER = "horizontal_cylinder" # 水平横躺圆柱（人手安全区）
     AABB = "aabb"                               # 轴对齐包围盒（预留扩展）
+    FLOATING_SPHERE = "floating_sphere"         # 浮空球体（悬空于棋盘上方）
+    FLOATING_CUBE = "floating_cube"             # 浮空立方体（悬空于棋盘上方）
 
 
 @dataclass(frozen=True)

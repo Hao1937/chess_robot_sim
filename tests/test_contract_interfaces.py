@@ -223,7 +223,7 @@ class ContractInterfaceTests(unittest.TestCase):
         self.assertEqual(command.command_type, "obstacle_mode")
         self.assertEqual(command.mode, "mode_2")
         self.assertGreaterEqual(len(scene.obstacles), 1)
-        self.assertTrue(all(obstacle.obstacle_id.startswith("preset_column_") for obstacle in scene.obstacles))
+        self.assertTrue(all(obstacle.obstacle_id.startswith("preset_") for obstacle in scene.obstacles))
 
     def test_obstacle_presets_create_demo_gate_and_staggered_pressure_layout(self):
         from src.common.config import DEFAULT_CONFIG
@@ -245,12 +245,13 @@ class ContractInterfaceTests(unittest.TestCase):
         self.assertEqual(cells_for("mode_1"), [(2, 5)])
         self.assertEqual(cells_for("mode_2"), [(4, 4)])
         self.assertEqual(cells_for("mode_3"), [(1, 5), (4, 5)])
-        self.assertTrue(all(obstacle.radius == 0.03 for obstacle in mode_1))
-        self.assertTrue(all(obstacle.radius == 0.06 for obstacle in mode_2))
-        self.assertTrue(all(obstacle.radius == 0.04 for obstacle in mode_3))
-        self.assertTrue(all(obstacle.height == 0.34 for obstacle in mode_1))
-        self.assertTrue(all(obstacle.height == 0.24 for obstacle in mode_2))
-        self.assertTrue(all(obstacle.height == 0.32 for obstacle in mode_3))
+        # 浮空球体/立方体：radius = 半边长/球半径，height = 直径/边长
+        self.assertTrue(all(obstacle.radius == 0.030 for obstacle in mode_1))
+        self.assertTrue(all(obstacle.radius == 0.030 for obstacle in mode_2))
+        self.assertTrue(all(obstacle.radius == 0.025 for obstacle in mode_3))
+        self.assertTrue(all(obstacle.height == 0.060 for obstacle in mode_1))
+        self.assertTrue(all(obstacle.height == 0.060 for obstacle in mode_2))
+        self.assertTrue(all(obstacle.height == 0.050 for obstacle in mode_3))
 
     def test_member_a_day_one_command_validation_edges(self):
         from src.interaction.cli import parse_command

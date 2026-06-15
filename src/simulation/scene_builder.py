@@ -6,7 +6,7 @@ import tempfile
 
 from src.common.config import DEFAULT_CONFIG, Config
 from src.common.initial_layout import INITIAL_PIECE_LAYOUT
-from src.common.types import LogicalAction, Obstacle, OperationResult, SceneHandle
+from src.common.types import LogicalAction, Obstacle, ObstacleShape, OperationResult, SceneHandle
 from src.planning.chessboard_mapping import cell_to_world
 from src.simulation._runtime import RUNTIME, clear_scene_bodies, ensure_client, p, project_root
 
@@ -753,27 +753,79 @@ def _create_piece_label(
 
 
 def _create_obstacle_body(obstacle: Obstacle, client_id: int) -> int:
+    """根据障碍物形状类型创建对应的 PyBullet 视觉/碰撞体。
+
+    - FLOATING_SPHERE → GEOM_SPHERE，定位在 center_xyz（球心）
+    - FLOATING_CUBE   → GEOM_BOX，半边长 = obstacle.radius，定位在 center_xyz（立方体中心）
+    - 其余形状保持原有 GEOM_CYLINDER 行为（竖直圆柱，底在棋盘面）
+    """
     x, y, z = obstacle.center_xyz
-    visual_id = p.createVisualShape(
-        p.GEOM_CYLINDER,
-        radius=obstacle.radius,
-        length=obstacle.height,
-        rgbaColor=(0.1, 0.25, 0.95, 0.8),
-        physicsClientId=client_id,
-    )
-    collision_id = p.createCollisionShape(
-        p.GEOM_CYLINDER,
-        radius=obstacle.radius,
-        height=obstacle.height,
-        physicsClientId=client_id,
-    )
-    body_id = p.createMultiBody(
-        baseMass=0.0,
-        baseCollisionShapeIndex=collision_id,
-        baseVisualShapeIndex=visual_id,
-        basePosition=(x, y, z + obstacle.height / 2.0),
-        physicsClientId=client_id,
-    )
+    shape = obstacle.shape
+
+    if shape == ObstacleShape.FLOATING_SPHERE:
+        visual_id = p.createVisualShape(
+            p.GEOM_SPHERE,
+            radius=obstacle.radius,
+            rgbaColor=(0.10, 0.30, 0.95, 0.75),
+            physicsClientId=client_id,
+        )
+        collision_id = p.createCollisionShape(
+            p.GEOM_SPHERE,
+            radius=obstacle.radius,
+            physicsClientId=client_id,
+        )
+        body_id = p.createMultiBody(
+            baseMass=0.0,
+            baseCollisionShapeIndex=collision_id,
+            baseVisualShapeIndex=visual_id,
+            basePosition=(x, y, z),          # 球心即 center_xyz
+            physicsClientId=client_id,
+        )
+
+    elif shape == ObstacleShape.FLOATING_CUBE:
+        half = obstacle.radius               # radius 复用为半边长
+        visual_id = p.createVisualShape(
+            p.GEOM_BOX,
+            halfExtents=(half, half, half),
+            rgbaColor=(0.95, 0.45, 0.10, 0.75),
+            physicsClientId=client_id,
+        )
+        collision_id = p.createCollisionShape(
+            p.GEOM_BOX,
+            halfExtents=(half, half, half),
+            physicsClientId=client_id,
+        )
+        body_id = p.createMultiBody(
+            baseMass=0.0,
+            baseCollisionShapeIndex=collision_id,
+            baseVisualShapeIndex=visual_id,
+            basePosition=(x, y, z),          # 立方体中心即 center_xyz
+            physicsClientId=client_id,
+        )
+
+    else:
+        # VERTICAL_CYLINDER / HORIZONTAL_CYLINDER / AABB 等原有形状
+        visual_id = p.createVisualShape(
+            p.GEOM_CYLINDER,
+            radius=obstacle.radius,
+            length=obstacle.height,
+            rgbaColor=(0.1, 0.25, 0.95, 0.8),
+            physicsClientId=client_id,
+        )
+        collision_id = p.createCollisionShape(
+            p.GEOM_CYLINDER,
+            radius=obstacle.radius,
+            height=obstacle.height,
+            physicsClientId=client_id,
+        )
+        body_id = p.createMultiBody(
+            baseMass=0.0,
+            baseCollisionShapeIndex=collision_id,
+            baseVisualShapeIndex=visual_id,
+            basePosition=(x, y, z + obstacle.height / 2.0),
+            physicsClientId=client_id,
+        )
+
     RUNTIME.scene_body_ids.append(body_id)
     return body_id
 
@@ -795,46 +847,40 @@ def _set_camera(config: Config, client_id: int) -> None:
 
 
 def build_obstacle_preset(obstacle_mode: str, config: Config = DEFAULT_CONFIG) -> list[Obstacle]:
-    """Return preset vertical cylinder obstacles for avoidance demos.
+    """返回浮空小型障碍物预设（立方体 / 球体），供避障演示使用。
 
-    Each entry is a 3-tuple ``(col, row, height)`` where *col* and *row* are
-    0‑based board indices.  2‑tuple ``(col, row)`` is also accepted for backward
-    compatibility (defaults height to 0.30).
+    每个条目为 ``(shape, col, row, radius, z_offset)``：
+    - *shape*: ``"sphere"`` 或 ``"cube"``
+    - *col*, *row*: 0‑based 棋盘格索引
+    - *radius*: 球体半径 / 立方体半边长
+    - *z_offset*: 障碍物中心相对于棋盘面的浮空高度
     """
-    presets = {
-        "mode_1": [(2, 5, 0.34)],          # C6 — tall thin (must side‑detour)
-        "mode_2": [(4, 4, 0.24)],          # E5 — short wide (can overfly)
-        "mode_3": [(1, 5, 0.32), (4, 5, 0.32)],  # B6+E6 — gate
+    presets: dict[str, list[tuple[str, int, int, float, float]]] = {
+        "mode_1": [("sphere", 2, 5, 0.030, 0.10)],           # 浮空小球 @ C6
+        "mode_2": [("cube",   4, 4, 0.030, 0.08)],           # 浮空小立方体 @ E5
+        "mode_3": [("sphere", 1, 5, 0.025, 0.10),            # 球体 @ B6
+                   ("cube",   4, 5, 0.025, 0.10)],           # 立方体 @ E6（门形）
         "none": [],
-    }
-    radii = {
-        "mode_1": 0.03,
-        "mode_2": 0.06,
-        "mode_3": 0.04,
-        "none": 0.0,
     }
     cells = presets.get(obstacle_mode)
     if cells is None:
         raise ValueError(f"unknown obstacle_mode: {obstacle_mode}")
-    radius = radii[obstacle_mode]
+
     obstacles: list[Obstacle] = []
-    for index, entry in enumerate(cells):
-        if len(entry) == 3:
-            col, row, height = entry
-        else:  # backward compat: 2‑tuple (col, row)
-            col, row = entry
-            height = 0.30
+    for index, (shape_key, col, row, radius, z_offset) in enumerate(cells):
+        shape = ObstacleShape.FLOATING_SPHERE if shape_key == "sphere" else ObstacleShape.FLOATING_CUBE
         obstacles.append(
             Obstacle(
-                obstacle_id=f"preset_column_{index + 1}",
+                obstacle_id=f"preset_{shape_key}_{index + 1}",
                 center_xyz=(
                     config.board_origin[0] + col * config.cell_size,
                     config.board_origin[1] + row * config.cell_size,
-                    config.z_board,
+                    config.z_board + z_offset,   # 浮空：中心在棋盘面上方
                 ),
                 radius=radius,
-                height=height,
+                height=radius * 2.0,             # 语义高度 = 直径/边长
                 dynamic=False,
+                shape=shape,
             )
         )
     return obstacles

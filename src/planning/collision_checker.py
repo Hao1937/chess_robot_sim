@@ -135,11 +135,32 @@ def _point_obstacle_clearance(
     """计算 2D 点到障碍物的 clearance（负值=穿透）。"""
     if obstacle.shape == ObstacleShape.HORIZONTAL_CYLINDER:
         return _point_horizontal_cylinder_clearance(px, py, obstacle)
+    elif obstacle.shape == ObstacleShape.FLOATING_CUBE:
+        return _point_aabb_clearance(px, py, obstacle)
     else:
-        # VERTICAL_CYLINDER 及默认：投影为圆
+        # VERTICAL_CYLINDER / FLOATING_SPHERE / AABB 及默认：投影为圆
         ox, oy = obstacle.center_xyz[0], obstacle.center_xyz[1]
         dist = math.hypot(px - ox, py - oy)
         return dist - obstacle.radius
+
+
+def _point_aabb_clearance(px: float, py: float, obstacle: Obstacle) -> float:
+    """计算 2D 点到轴对齐方形（浮空立方体 XY 投影）的 clearance。
+
+    obstacle.radius 复用为半边长；立方体无旋转，AABB 为 [cx±r, cy±r]。
+    """
+    cx, cy = obstacle.center_xyz[0], obstacle.center_xyz[1]
+    half = obstacle.radius  # 半边长
+    # 点到 AABB 的最近距离
+    dx = max(0.0, abs(px - cx) - half)
+    dy = max(0.0, abs(py - cy) - half)
+    dist = math.hypot(dx, dy)
+    # 点在内部时返回负值
+    if abs(px - cx) <= half and abs(py - cy) <= half:
+        # 穿透深度 = 到最近边的距离（取负）
+        penetration = half - max(abs(px - cx), abs(py - cy))
+        return -penetration
+    return dist
 
 
 def _point_horizontal_cylinder_clearance(
