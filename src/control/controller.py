@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 import random
+import time
 from typing import Callable
 
 from src.common.config import DEFAULT_CONFIG, Config
@@ -27,6 +28,7 @@ _SETTLE_STEPS = 150        # 每段末 waypoint 的沉降步数上限（条件�
 _SETTLE_TOLERANCE = 0.004  # 沉降收敛阈值（rad）：所有关节误差 < 此值即提前结束
 _MAX_VELOCITY_FAST = 4.0
 _MAX_VELOCITY_SAFE = 2.5
+_SIMULATION_STEP_SECONDS = 1.0 / 240.0
 # 每步关节预算（rad/step）：取 maxVelocity 的一个保守比例 / 240Hz，
 # 让 PD 在该步数内能实际跟上恒定速度的 target。
 _STEP_BUDGET_FRACTION = 0.6
@@ -261,12 +263,14 @@ def _execute_pybullet_step(
 
     executed = 0
     for i in range(sim_steps):
+        step_started_at = time.perf_counter()
         p.stepSimulation(ctx.client_id)
         sync_manual_attachments(ctx.client_id)
         executed += 1
         # 每 20 步泵送一次 GUI，避免长时间阻塞导致窗口无响应
         if _pump_callback is not None and i % 20 == 0:
             _pump_callback()
+        _pace_pybullet_realtime_step(step_started_at)
         # 段末沉降：收敛即提前退出，避免到位后原地空等（消除卡顿与浪费）
         if is_last and i >= _STREAM_STEPS_MIN:
             cur = tuple(
@@ -275,7 +279,7 @@ def _execute_pybullet_step(
             )
             if all(abs(cur[k] - clamped[k]) < _SETTLE_TOLERANCE for k in range(len(clamped))):
                 break
-    sim_time = executed * (1.0 / 240)
+    sim_time = executed * _SIMULATION_STEP_SECONDS
 
     # Read back actual joint positions
     actual = tuple(
@@ -283,6 +287,13 @@ def _execute_pybullet_step(
         for j in ctx.joint_indices
     )
     return actual, sim_time
+
+
+def _pace_pybullet_realtime_step(step_started_at: float) -> None:
+    """Keep visible PyBullet motion close to the simulated 240 Hz clock."""
+    remaining = _SIMULATION_STEP_SECONDS - (time.perf_counter() - step_started_at)
+    if remaining > 0.0:
+        time.sleep(remaining)
 
 
 def _execute_mock_step(

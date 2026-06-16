@@ -34,6 +34,7 @@ def run_command(
     human_hand_present: bool = False,
     skip_feasibility: bool = False,
     horizontal_override: list[list[tuple[float, float, float]] | None] | None = None,
+    logical_actions_override: list[LogicalAction] | None = None,
 ) -> dict[str, object]:
     """Run one command through the A/B/C/D pipeline using an existing session."""
     # 不再重置/teleport 关节：规划层已从机器人当前实际姿态播种 IK 链
@@ -47,7 +48,7 @@ def run_command(
     if not validation.is_legal:
         raise ValueError(validation.reason)
 
-    actions = make_logical_actions(board, command)
+    actions = list(logical_actions_override) if logical_actions_override is not None else make_logical_actions(board, command)
     primitives = build_motion_primitives(actions, config)
     planning_contexts = build_primitive_obstacle_contexts(
         actions=actions,
@@ -211,6 +212,41 @@ def run_demo(command_text: str = "A1 A2") -> dict[str, object]:
     )
 
 
+def _build_reverse_reset_actions(action_history: list[list[LogicalAction]]) -> list[LogicalAction]:
+    """Build reset actions by undoing successful board-changing commands."""
+    reset_actions: list[LogicalAction] = []
+    for actions in reversed(action_history):
+        reset_actions.extend(_invert_logical_actions(actions))
+    return reset_actions
+
+
+def _invert_logical_actions(actions: list[LogicalAction]) -> list[LogicalAction]:
+    """Invert pick/place pairs while preserving each piece's real route."""
+    move_pairs: list[tuple[LogicalAction, LogicalAction]] = []
+    index = 0
+    while index + 1 < len(actions):
+        pick = actions[index]
+        place = actions[index + 1]
+        if (
+            pick.action_type == "pick"
+            and place.action_type == "place"
+            and pick.piece_id
+            and pick.piece_id == place.piece_id
+        ):
+            move_pairs.append((pick, place))
+            index += 2
+            continue
+        index += 1
+
+    inverted: list[LogicalAction] = []
+    for pick, place in reversed(move_pairs):
+        inverted.extend([
+            LogicalAction(action_type="pick", cell=place.cell, piece_id=place.piece_id),
+            LogicalAction(action_type="place", cell=pick.cell, piece_id=pick.piece_id),
+        ])
+    return inverted
+
+
 class _NoOpBoardGUI:
     """A no-op BoardGUI proxy used when GUI is disabled (e.g. tests)."""
     is_open: bool = True
@@ -222,6 +258,12 @@ class _NoOpBoardGUI:
         pass
 
     def set_status(self, text: str) -> None:
+        pass
+
+    def log(self, line: str) -> None:
+        pass
+
+    def set_obstacle_mode(self, mode: str) -> None:
         pass
 
     def close(self) -> None:
@@ -246,6 +288,7 @@ def run_interactive(
     robot = load_robot()
     scene = build_scene(config=config, obstacle_mode="mode_1")
     results: list[dict[str, object]] = []
+    action_history: list[list[LogicalAction]] = []
     human_hand_present = False
     steps = 0
 
@@ -265,13 +308,13 @@ def run_interactive(
     else:
         board_gui = _NoOpBoardGUI()
 
-    output_func("interactive session started; enter moves, obstacle_mode N, reset, hand_on/off, or quit")
+    board_gui.log("Session started — use board clicks, text box, or controls")
     while True:
         command = poll_gui_command(board, input_func=input_func)
         if command is None:
             continue
         if command.command_type == "quit":
-            output_func("interactive session ended")
+            board_gui.log("Session ended")
             break
 
         if command.command_type == "hand_on":
@@ -283,8 +326,10 @@ def run_interactive(
 
         if command.command_type == "obstacle_mode":
             scene = build_scene(config=config, obstacle_mode=command.mode)
+            board_gui.set_obstacle_mode(command.mode)
+            board_gui.log(f"obstacle → {command.mode}")
 
-        # 在执行仿真前显示状态提示，并立即刷新到屏幕
+        # 在执行仿真前显示状态提示
         if board_gui.is_open:
             board_gui.set_status("机械臂移动中...")
             try:
@@ -292,14 +337,20 @@ def run_interactive(
             except Exception:
                 pass
 
+        logical_actions_override = (
+            _build_reverse_reset_actions(action_history)
+            if command.command_type == "reset" and action_history
+            else None
+        )
+
         try:
             if interactive2_mode and steps == 2:
-                # 第三步：正常管线 + 手写弧线替换所有水平移动阶段
                 result = run_command(
                     command, board, scene, robot, config,
                     human_hand_present=human_hand_present,
                     horizontal_override=_build_demo_arcs(config),
                     skip_feasibility=True,
+                    logical_actions_override=logical_actions_override,
                 )
             else:
                 result = run_command(
@@ -309,11 +360,12 @@ def run_interactive(
                     robot,
                     config,
                     human_hand_present=human_hand_present,
+                    logical_actions_override=logical_actions_override,
                 )
         except ValueError as exc:
             if board_gui.is_open:
                 board_gui.set_status("")
-            output_func(f"error: {exc}")
+            board_gui.log(f"error: {exc}")
             continue
 
         # 清除状态提示
@@ -321,14 +373,25 @@ def run_interactive(
             board_gui.set_status("")
 
         results.append(result)
-        output_func(f"ok: {command.command_type}")
+        execution = result.get("execution")
+        command_succeeded = getattr(execution, "success", True)
+        if command_succeeded:
+            if command.command_type == "move":
+                action_history.append(list(result.get("actions", [])))
+            elif command.command_type == "reset":
+                action_history.clear()
+
+        # 显示结果
+        if command.command_type == "move":
+            board_gui.log(f"ok: {command.from_cell} → {command.to_cell}")
+        else:
+            board_gui.log(f"ok: {command.command_type}")
 
         # 更新棋盘 GUI 显示
         if board_gui.is_open:
             board_gui.update_board(board)
         else:
-            # 用户关闭了棋盘窗口，退出交互
-            output_func("board window closed; interactive session ended")
+            board_gui.log("board window closed")
             break
 
         steps += 1

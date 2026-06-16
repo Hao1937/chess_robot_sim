@@ -81,8 +81,9 @@ _JOINT_LIMITS = [
 ]
 
 
-# 主种子收敛误差低于此值即采用，不再尝试备选种子（保住链式连续性 + 省时）
-_IK_RETRY_THRESHOLD = 0.02
+# A candidate must be accurate and nearly vertical-down before it can win early.
+_IK_GOOD_POSITION_TOL = 0.006
+_IK_DOWNWARD_TARGET = 0.92
 # 备选种子：覆盖不同 shoulder_pan/lift/elbow 分支，帮助跳出局部极小
 _FALLBACK_IK_SEEDS: tuple[tuple[float, ...], ...] = (
     (0.0, -1.2, 1.8, -0.6, 0.0, 0.0),
@@ -128,22 +129,44 @@ def _solve_ik_numerical(
     seeds.append(tuple(config.home_pose[:6]))
     seeds.extend(_FALLBACK_IK_SEEDS)
 
-    best_theta: list[float] | None = None
+    from src.control.fk_solver import _get_tool0_z_axis, _solve_fk_urdf_chain
+
+    primary_seed = tuple(seed) if seed is not None else tuple(config.home_pose[:6])
+    best_solution: tuple[float, ...] | None = None
+    best_score = float("inf")
     best_error = float("inf")
     for seed_i in seeds:
         theta_i, err_i = _ik_descent(
             target_xyz, config, seed_i, max_iters, tolerance, damping,
         )
-        if err_i < best_error:
-            best_error = err_i
-            best_theta = theta_i
-        # 已足够好 → 直接采用（主种子命中时即此分支，零额外开销）
-        if best_error < _IK_RETRY_THRESHOLD:
-            break
+        if err_i >= 0.05:
+            if err_i < best_error:
+                best_error = err_i
+                best_solution = tuple(theta_i)
+            continue
 
-    # 收敛成功 → 朝向优化后返回
-    if best_theta is not None and best_error < 0.05:
-        return _nullspace_optimize_orientation(tuple(best_theta), target_xyz, config)
+        candidate = _nullspace_optimize_orientation(tuple(theta_i), target_xyz, config)
+        fk_xyz = _solve_fk_urdf_chain(candidate, config)
+        final_error = math.sqrt(sum((fk_xyz[i] - target_xyz[i]) ** 2 for i in range(3)))
+        _, _, zz = _get_tool0_z_axis(candidate, config)
+        downward_score = -zz
+
+        if final_error < best_error:
+            best_error = final_error
+
+        continuity_cost = _joint_distance_wrapped(candidate, primary_seed)
+        orientation_shortfall = max(0.0, _IK_DOWNWARD_TARGET - downward_score)
+        score = final_error + 0.08 * orientation_shortfall * orientation_shortfall + 0.0005 * continuity_cost
+        if score < best_score:
+            best_score = score
+            best_solution = candidate
+
+        if final_error <= _IK_GOOD_POSITION_TOL and downward_score >= _IK_DOWNWARD_TARGET:
+            return candidate
+
+    # 收敛成功 → 返回姿态/位置/连续性综合评分最好的解
+    if best_solution is not None and best_error < 0.05:
+        return best_solution
 
     # 所有种子均未收敛：返回 seed（保轨迹连续）或 home_pose
     if seed is not None:
@@ -403,6 +426,12 @@ def _inverse_kinematics_ur5(target_pose: list[list[float]]) -> list[tuple[float,
 
 def _distance_to_home(solution: tuple[float, ...], home_pose: tuple[float, ...]) -> float:
     return math.sqrt(sum((theta - home) ** 2 for theta, home in zip(solution, home_pose[:6])))
+
+
+def _joint_distance_wrapped(solution: tuple[float, ...], seed: tuple[float, ...]) -> float:
+    return math.sqrt(
+        sum(_wrap_to_pi(theta - seed_theta) ** 2 for theta, seed_theta in zip(solution, seed[:6]))
+    )
 
 
 def _clamp(value: float, lower: float = -1.0, upper: float = 1.0) -> float:

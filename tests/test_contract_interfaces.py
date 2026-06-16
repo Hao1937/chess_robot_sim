@@ -445,6 +445,106 @@ class ContractInterfaceTests(unittest.TestCase):
 
         self.assertEqual(visual_calls, [True, False])
 
+    def test_interactive_reset_replays_history_in_reverse_and_updates_gui(self):
+        import main
+        from src.common.types import ExecutionResult, LogicalAction, MoveCommand, RobotHandle, SceneHandle
+
+        commands = iter([
+            MoveCommand(command_type="move", from_cell="A1", to_cell="B1"),
+            MoveCommand(command_type="reset"),
+            MoveCommand(command_type="quit"),
+        ])
+        move_actions = [
+            LogicalAction(action_type="pick", cell="B1", piece_id="red_horse_1"),
+            LogicalAction(action_type="place", cell="CAPTURED_RED_1", piece_id="red_horse_1"),
+            LogicalAction(action_type="pick", cell="A1", piece_id="red_rook_1"),
+            LogicalAction(action_type="place", cell="B1", piece_id="red_rook_1"),
+        ]
+        expected_reset_actions = [
+            LogicalAction(action_type="pick", cell="B1", piece_id="red_rook_1"),
+            LogicalAction(action_type="place", cell="A1", piece_id="red_rook_1"),
+            LogicalAction(action_type="pick", cell="CAPTURED_RED_1", piece_id="red_horse_1"),
+            LogicalAction(action_type="place", cell="B1", piece_id="red_horse_1"),
+        ]
+        reset_overrides: list[list[LogicalAction] | None] = []
+
+        class FakeBoardGUI:
+            is_open = True
+
+            def __init__(self):
+                self.snapshots: list[dict[str, str]] = []
+
+            def update_board(self, board):
+                self.snapshots.append({
+                    cell: piece.piece_id for cell, piece in board.pieces.items()
+                })
+
+            def set_status(self, text):
+                pass
+
+            def log(self, line):
+                pass
+
+            def set_obstacle_mode(self, mode):
+                pass
+
+            def close(self):
+                self.is_open = False
+
+        fake_gui = FakeBoardGUI()
+        original_poll = main.poll_gui_command
+        original_create_gui = main.create_board_gui
+        original_run_command = main.run_command
+        original_load_robot = main.load_robot
+        original_build_scene = main.build_scene
+        original_pump = main.set_simulation_pump_callback
+
+        def fake_run_command(command, board, scene, robot, config=main.DEFAULT_CONFIG, **kwargs):
+            actions = move_actions
+            if command.command_type == "reset":
+                actions = kwargs.get("logical_actions_override")
+                reset_overrides.append(actions)
+                if actions is None:
+                    actions = []
+            main.apply_logical_actions(board, actions)
+            return {
+                "command": command,
+                "actions": actions,
+                "execution": ExecutionResult(
+                    success=True,
+                    desired_joint_angles=[],
+                    actual_joint_angles=[],
+                    joint_errors=[],
+                    end_effector_errors=[],
+                    obstacle_clearances=[],
+                    execution_time=0.0,
+                ),
+                "obstacle_ids": [],
+            }
+
+        try:
+            main.poll_gui_command = lambda board, input_func=input: next(commands)
+            main.create_board_gui = lambda board: fake_gui
+            main.run_command = fake_run_command
+            main.load_robot = lambda: RobotHandle(robot_id=1, end_effector_id=2, joint_indices=())
+            main.build_scene = lambda config=main.DEFAULT_CONFIG, obstacle_mode="mode_1": SceneHandle(
+                board_id=1, piece_ids={}, obstacles=[]
+            )
+            main.set_simulation_pump_callback = lambda callback: None
+
+            main.run_interactive(enable_board_gui=True)
+        finally:
+            main.poll_gui_command = original_poll
+            main.create_board_gui = original_create_gui
+            main.run_command = original_run_command
+            main.load_robot = original_load_robot
+            main.build_scene = original_build_scene
+            main.set_simulation_pump_callback = original_pump
+
+        self.assertEqual(reset_overrides, [expected_reset_actions])
+        self.assertEqual(fake_gui.snapshots[-1]["A1"], "red_rook_1")
+        self.assertEqual(fake_gui.snapshots[-1]["B1"], "red_horse_1")
+
     def test_red_chinese_notation_rook_horizontal_move(self):
         from src.common.types import BoardState, Piece, PieceColor, PieceType
         from src.interaction.chinese_notation import parse_chinese_move
@@ -640,6 +740,68 @@ class ContractInterfaceTests(unittest.TestCase):
         self.assertEqual(len(result.end_effector_errors), n)
         self.assertEqual(len(result.obstacle_clearances), n)
 
+    def test_pybullet_execution_paces_every_simulation_step(self):
+        """Real PyBullet execution should not run all sim steps in a tight CPU burst."""
+        from src.control import controller
+
+        class FakePyBullet:
+            POSITION_CONTROL = 42
+
+            def __init__(self):
+                self.control_calls = []
+                self.step_count = 0
+
+            def getJointState(self, bodyUniqueId, jointIndex, physicsClientId=None):
+                return (0.0, 0.0, 0.0, 0.0)
+
+            def setJointMotorControl2(self, **kwargs):
+                self.control_calls.append(kwargs)
+
+            def stepSimulation(self, client_id):
+                self.step_count += 1
+
+        fake_p = FakePyBullet()
+        ctx = controller._PyBulletContext()
+        ctx.robot_id = 1
+        ctx.client_id = 2
+        ctx.joint_indices = (0, 1, 2, 3, 4, 5)
+
+        pace_calls = []
+        original_p = controller.p
+        original_sync = controller.sync_manual_attachments
+        original_pump = controller._pump_callback
+        had_pace = hasattr(controller, "_pace_pybullet_realtime_step")
+        original_pace = getattr(controller, "_pace_pybullet_realtime_step", None)
+
+        try:
+            controller.p = fake_p
+            controller.sync_manual_attachments = lambda client_id: None
+            controller._pump_callback = None
+            controller._pace_pybullet_realtime_step = lambda step_started_at: pace_calls.append(step_started_at)
+
+            controller._execute_pybullet_step(
+                ctx,
+                waypoint=(0.02, 0.0, 0.0, 0.0, 0.0, 0.0),
+                mode="fast",
+                is_last=False,
+            )
+        finally:
+            controller.p = original_p
+            controller.sync_manual_attachments = original_sync
+            controller._pump_callback = original_pump
+            if had_pace:
+                controller._pace_pybullet_realtime_step = original_pace
+            else:
+                delattr(controller, "_pace_pybullet_realtime_step")
+
+        self.assertGreater(fake_p.step_count, 0)
+        self.assertEqual(len(pace_calls), fake_p.step_count)
+        self.assertTrue(fake_p.control_calls)
+        self.assertTrue(all(
+            call["maxVelocity"] == controller._MAX_VELOCITY_FAST
+            for call in fake_p.control_calls
+        ))
+
     def test_ik_solver_yields_downward_orientation_at_e1(self):
         """Bug 2: E1 位置的 IK 解应使 tool0 z 轴接近竖直向下。
 
@@ -667,6 +829,33 @@ class ContractInterfaceTests(unittest.TestCase):
                            f"tool0 z 轴应接近竖直向下，当前 -zz={-zz:.4f}（需 > 0.9）")
 
     # ── PyBullet 实物仿真测试 ──
+
+    def test_ik_solver_prefers_downward_orientation_on_back_rank(self):
+        """Row-10 grasp targets should select the vertical-down IK branch."""
+        import math
+
+        from src.common.config import DEFAULT_CONFIG
+        from src.planning.chessboard_mapping import cell_to_world
+        from src.planning.ik_solver import solve_ik
+        from src.control.fk_solver import _get_tool0_z_axis, solve_fk
+
+        seed = DEFAULT_CONFIG.home_pose[:6]
+        for cell in ("A10", "C10", "I10"):
+            world = cell_to_world(cell, DEFAULT_CONFIG)
+            target = (world[0], world[1], world[2] + DEFAULT_CONFIG.z_grasp)
+            solution = solve_ik(target, DEFAULT_CONFIG, seed=seed)
+            fk_xyz = solve_fk(solution, DEFAULT_CONFIG)
+            _, _, zz = _get_tool0_z_axis(solution, DEFAULT_CONFIG)
+
+            self.assertLess(
+                math.dist(fk_xyz, target), 0.006,
+                f"{cell} IK should still reach the grasp point",
+            )
+            self.assertGreater(
+                -zz, 0.92,
+                f"{cell} tool0 z axis should point nearly straight down; got {-zz:.4f}",
+            )
+            seed = solution
 
     def test_piece_attaches_and_follows_end_effector_in_pybullet(self):
         """验证棋子（含子部件三层）吸附后跟随末端执行器运动。
@@ -1387,6 +1576,37 @@ class ContractInterfaceTests(unittest.TestCase):
         from src.interaction.board_gui import PIECE_CHARS, BoardGUI
         self.assertIsInstance(PIECE_CHARS, dict)
         self.assertTrue(callable(BoardGUI))
+
+    def test_board_gui_programmatic_obstacle_mode_sync_does_not_enqueue_command(self):
+        """Programmatic radio sync should not echo obstacle_mode into the command queue."""
+        import queue
+        from src.interaction.board_gui import BoardGUI
+
+        class FakeRadio:
+            def __init__(self, callback):
+                self.callback = callback
+                self.active = 0
+
+            def disconnect_events(self):
+                pass
+
+            def set_active(self, index):
+                self.active = index
+                labels = ("mode_1", "mode_2", "mode_3", "mode_4")
+                self.callback(labels[index])
+
+            def on_clicked(self, callback):
+                self.callback = callback
+
+        gui = BoardGUI.__new__(BoardGUI)
+        gui._command_queue = queue.Queue()
+        gui._current_obstacle_mode = "mode_1"
+        gui._radio = FakeRadio(gui._on_obstacle_mode)
+
+        gui.set_obstacle_mode("mode_2")
+
+        self.assertTrue(gui._command_queue.empty())
+        self.assertEqual(gui._current_obstacle_mode, "mode_2")
 
     def test_board_gui_graceful_import_error_without_matplotlib(self):
         """BoardGUI._ensure_matplotlib raises ImportError when matplotlib missing."""

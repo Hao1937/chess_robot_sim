@@ -857,10 +857,11 @@ def build_obstacle_preset(obstacle_mode: str, config: Config = DEFAULT_CONFIG) -
     - *height*: 障碍物高度（圆柱的竖直跨度）；None 则自动取 2*radius
     """
     presets: dict[str, list[tuple[str, int, int, float, float, float | None]]] = {
-        "mode_1": [("cylinder", 2, 5, 0.003, 0.06, 0.22)],    # 极细浮空圆柱 @ C5
+        "mode_1": [("cylinder", 2, 5, 0.003, 0.06, 0.22)],    # 极细浮空圆柱 @ C6
         "mode_2": [("cube",     4, 4, 0.030, 0.08, None)],     # 浮空小立方体 @ E5
         "mode_3": [("sphere",   1, 5, 0.025, 0.10, None),      # 球体 @ B6
                    ("cube",     4, 5, 0.025, 0.10, None)],     # 立方体 @ E6（门形）
+        "mode_4": [],                                            # 无障碍
         "none": [],
     }
     cells = presets.get(obstacle_mode)
