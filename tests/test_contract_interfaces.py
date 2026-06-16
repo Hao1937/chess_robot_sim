@@ -991,6 +991,80 @@ class ContractInterfaceTests(unittest.TestCase):
             for call in fake_p.control_calls
         ))
 
+    def test_pybullet_execution_draws_end_effector_trajectory_line(self):
+        """Real PyBullet execution should leave a visible EE path trace."""
+        from src.control import controller
+        from src.simulation._runtime import RUNTIME
+
+        class FakePyBullet:
+            POSITION_CONTROL = 42
+
+            def __init__(self):
+                self.step_count = 0
+                self.lines = []
+
+            def getJointState(self, bodyUniqueId, jointIndex, physicsClientId=None):
+                return (0.0, 0.0, 0.0, 0.0)
+
+            def setJointMotorControl2(self, **kwargs):
+                pass
+
+            def stepSimulation(self, client_id):
+                self.step_count += 1
+
+            def getLinkState(self, bodyUniqueId, linkIndex, physicsClientId=None):
+                return ((0.01 * self.step_count, 0.0, 0.2), (0.0, 0.0, 0.0, 1.0))
+
+            def addUserDebugLine(self, fromXYZ, toXYZ, **kwargs):
+                line_id = 100 + len(self.lines)
+                self.lines.append((fromXYZ, toXYZ, kwargs))
+                return line_id
+
+        fake_p = FakePyBullet()
+        ctx = controller._PyBulletContext()
+        ctx.robot_id = 1
+        ctx.client_id = 2
+        ctx.joint_indices = (0, 1, 2, 3, 4, 5)
+
+        original_p = controller.p
+        original_sync = controller.sync_manual_attachments
+        original_pump = controller._pump_callback
+        original_pace = controller._pace_pybullet_realtime_step
+        original_ee = RUNTIME.end_effector_id
+        original_debug_ids = list(getattr(RUNTIME, "ee_trajectory_debug_ids", []))
+        observed_debug_ids = []
+
+        try:
+            controller.p = fake_p
+            controller.sync_manual_attachments = lambda client_id: None
+            controller._pump_callback = None
+            controller._pace_pybullet_realtime_step = lambda step_started_at: None
+            RUNTIME.end_effector_id = 6
+            if hasattr(RUNTIME, "ee_trajectory_debug_ids"):
+                RUNTIME.ee_trajectory_debug_ids.clear()
+
+            controller._execute_pybullet_step(
+                ctx,
+                waypoint=(0.02, 0.0, 0.0, 0.0, 0.0, 0.0),
+                mode="fast",
+                is_last=False,
+            )
+            observed_debug_ids = list(getattr(RUNTIME, "ee_trajectory_debug_ids", []))
+        finally:
+            controller.p = original_p
+            controller.sync_manual_attachments = original_sync
+            controller._pump_callback = original_pump
+            controller._pace_pybullet_realtime_step = original_pace
+            RUNTIME.end_effector_id = original_ee
+            if hasattr(RUNTIME, "ee_trajectory_debug_ids"):
+                RUNTIME.ee_trajectory_debug_ids[:] = original_debug_ids
+
+        self.assertGreater(fake_p.step_count, 0)
+        self.assertGreater(len(fake_p.lines), 0)
+        self.assertEqual(fake_p.lines[0][0], (0.0, 0.0, 0.2))
+        self.assertEqual(fake_p.lines[0][1], (0.01, 0.0, 0.2))
+        self.assertEqual(observed_debug_ids[:1], [100])
+
     def test_ik_solver_yields_downward_orientation_at_e1(self):
         """Bug 2: E1 位置的 IK 解应使 tool0 z 轴接近竖直向下。
 

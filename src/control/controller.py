@@ -35,6 +35,8 @@ _STEP_BUDGET_FRACTION = 0.6
 _POSITION_GAIN = 0.6
 _VELOCITY_GAIN = 1.0
 _MOTOR_FORCE = 800
+_EE_TRAJECTORY_COLOR = (1.0, 0.45, 0.0)
+_EE_TRAJECTORY_LINE_WIDTH = 2.5
 
 # 可选回调：在每个 waypoint 仿真步进后调用，用于保持 GUI 事件循环活跃
 _pump_callback: Callable[[], None] | None = None
@@ -261,11 +263,17 @@ def _execute_pybullet_step(
             physicsClientId=ctx.client_id,
         )
 
+    previous_ee_position = _read_end_effector_position(ctx)
     executed = 0
     for i in range(sim_steps):
         step_started_at = time.perf_counter()
         p.stepSimulation(ctx.client_id)
         sync_manual_attachments(ctx.client_id)
+        current_ee_position = _read_end_effector_position(ctx)
+        _draw_end_effector_trajectory_segment(
+            ctx, previous_ee_position, current_ee_position,
+        )
+        previous_ee_position = current_ee_position
         executed += 1
         # 每 20 步泵送一次 GUI，避免长时间阻塞导致窗口无响应
         if _pump_callback is not None and i % 20 == 0:
@@ -294,6 +302,51 @@ def _pace_pybullet_realtime_step(step_started_at: float) -> None:
     remaining = _SIMULATION_STEP_SECONDS - (time.perf_counter() - step_started_at)
     if remaining > 0.0:
         time.sleep(remaining)
+
+
+def _read_end_effector_position(
+    ctx: _PyBulletContext,
+) -> tuple[float, float, float] | None:
+    """Read the current EE world position from PyBullet."""
+    ee_id = RUNTIME.end_effector_id
+    if ee_id is None:
+        return None
+    try:
+        state = p.getLinkState(
+            ctx.robot_id,
+            ee_id,
+            physicsClientId=ctx.client_id,
+        )
+    except Exception:
+        return None
+    if state is None:
+        return None
+    pos = state[0]
+    return (float(pos[0]), float(pos[1]), float(pos[2]))
+
+
+def _draw_end_effector_trajectory_segment(
+    ctx: _PyBulletContext,
+    start: tuple[float, float, float] | None,
+    end: tuple[float, float, float] | None,
+) -> None:
+    """Draw one visible segment of the actual EE trajectory."""
+    if start is None or end is None:
+        return
+    if math.dist(start, end) < 1e-7:
+        return
+    try:
+        debug_id = p.addUserDebugLine(
+            start,
+            end,
+            lineColorRGB=_EE_TRAJECTORY_COLOR,
+            lineWidth=_EE_TRAJECTORY_LINE_WIDTH,
+            lifeTime=0,
+            physicsClientId=ctx.client_id,
+        )
+    except Exception:
+        return
+    RUNTIME.ee_trajectory_debug_ids.append(debug_id)
 
 
 def _execute_mock_step(
