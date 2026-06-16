@@ -67,6 +67,7 @@ class BoardGUI:
         self._cid_motion: int | None = None
         self._cid_close: int | None = None
         self._last_draw_time = 0.0
+        self._last_event_pump_time = 0.0
         self._valid_targets: set[str] = set()
         self._valid_target_patches: list = []
         self._output_lines: list[str] = []
@@ -229,6 +230,22 @@ class BoardGUI:
     def log(self, line: str) -> None:
         """Public API: append a line to the output log."""
         self._append_output(line)
+
+    def pump_events(self, min_interval: float = 0.2) -> None:
+        """Process pending GUI events without adding a costly pause each call."""
+        if not self._window_open:
+            return
+        now = time.monotonic()
+        if min_interval > 0.0 and now - self._last_event_pump_time < min_interval:
+            return
+        self._last_event_pump_time = now
+        try:
+            self._fig.canvas.flush_events()
+        except Exception:
+            try:
+                self._plt.pause(0.001)
+            except Exception:
+                pass
 
     # ── status ──
 

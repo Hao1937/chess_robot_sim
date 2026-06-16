@@ -35,6 +35,7 @@ def run_command(
     skip_feasibility: bool = False,
     horizontal_override: list[list[tuple[float, float, float]] | None] | None = None,
     logical_actions_override: list[LogicalAction] | None = None,
+    allow_rook_jumps: bool = False,
 ) -> dict[str, object]:
     """Run one command through the A/B/C/D pipeline using an existing session."""
     # 不再重置/teleport 关节：规划层已从机器人当前实际姿态播种 IK 链
@@ -44,7 +45,7 @@ def run_command(
     # 清理上一个命令的路径可视化线条，避免累积
     clear_debug_visuals()
 
-    validation = validate_move(board, command)
+    validation = validate_move(board, command, allow_rook_jumps=allow_rook_jumps)
     if not validation.is_legal:
         raise ValueError(validation.reason)
 
@@ -301,7 +302,7 @@ def run_interactive(
         def _pump_gui() -> None:
             try:
                 if board_gui.is_open:
-                    board_gui._plt.pause(0.001)
+                    board_gui.pump_events(min_interval=0.2)
             except Exception:
                 pass
         set_simulation_pump_callback(_pump_gui)
@@ -351,6 +352,7 @@ def run_interactive(
                     horizontal_override=_build_demo_arcs(config),
                     skip_feasibility=True,
                     logical_actions_override=logical_actions_override,
+                    allow_rook_jumps=interactive2_mode,
                 )
             else:
                 result = run_command(
@@ -361,6 +363,7 @@ def run_interactive(
                     config,
                     human_hand_present=human_hand_present,
                     logical_actions_override=logical_actions_override,
+                    allow_rook_jumps=interactive2_mode,
                 )
         except ValueError as exc:
             if board_gui.is_open:
