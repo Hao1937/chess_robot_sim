@@ -1065,6 +1065,96 @@ class ContractInterfaceTests(unittest.TestCase):
         self.assertEqual(fake_p.lines[0][1], (0.01, 0.0, 0.2))
         self.assertEqual(observed_debug_ids[:1], [100])
 
+    def test_pybullet_execution_draws_planned_end_effector_trajectory_line(self):
+        """Real PyBullet execution should draw the planned EE path for tracking comparison."""
+        from src.common.types import JointTrajectory
+        from src.control import controller
+        from src.simulation._runtime import RUNTIME
+
+        class FakePyBullet:
+            POSITION_CONTROL = 42
+
+            def __init__(self):
+                self.step_count = 0
+                self.lines = []
+
+            def getJointState(self, bodyUniqueId, jointIndex, physicsClientId=None):
+                return (0.0, 0.0, 0.0, 0.0)
+
+            def setJointMotorControl2(self, **kwargs):
+                pass
+
+            def stepSimulation(self, client_id):
+                self.step_count += 1
+
+            def getLinkState(self, bodyUniqueId, linkIndex, physicsClientId=None):
+                return ((0.0, 0.01 * self.step_count, 0.2), (0.0, 0.0, 0.0, 1.0))
+
+            def addUserDebugLine(self, fromXYZ, toXYZ, **kwargs):
+                line_id = 200 + len(self.lines)
+                self.lines.append((fromXYZ, toXYZ, kwargs))
+                return line_id
+
+        fake_p = FakePyBullet()
+        ctx = controller._PyBulletContext()
+        ctx.robot_id = 1
+        ctx.client_id = 2
+        ctx.joint_indices = (0, 1, 2, 3, 4, 5)
+
+        original_p = controller.p
+        original_get_context = controller._get_pybullet_context
+        original_sync = controller.sync_manual_attachments
+        original_pump = controller._pump_callback
+        original_pace = controller._pace_pybullet_realtime_step
+        original_solve_fk = controller.solve_fk
+        original_ee = RUNTIME.end_effector_id
+        original_actual_debug_ids = list(getattr(RUNTIME, "ee_trajectory_debug_ids", []))
+        original_planned_debug_ids = list(getattr(RUNTIME, "planned_ee_trajectory_debug_ids", []))
+        observed_planned_debug_ids = []
+
+        try:
+            controller.p = fake_p
+            controller._get_pybullet_context = lambda: ctx
+            controller.sync_manual_attachments = lambda client_id: None
+            controller._pump_callback = None
+            controller._pace_pybullet_realtime_step = lambda step_started_at: None
+            controller.solve_fk = lambda joint, config: (joint[0], joint[1], joint[2])
+            RUNTIME.end_effector_id = 6
+            if hasattr(RUNTIME, "ee_trajectory_debug_ids"):
+                RUNTIME.ee_trajectory_debug_ids.clear()
+            if hasattr(RUNTIME, "planned_ee_trajectory_debug_ids"):
+                RUNTIME.planned_ee_trajectory_debug_ids.clear()
+
+            controller.execute_trajectory(JointTrajectory(
+                joint_waypoints=[
+                    (0.0, 0.0, 0.2, 0.0, 0.0, 0.0),
+                    (0.1, 0.0, 0.2, 0.0, 0.0, 0.0),
+                ],
+                speed_profile=["fast", "fast"],
+            ))
+            observed_planned_debug_ids = list(getattr(RUNTIME, "planned_ee_trajectory_debug_ids", []))
+        finally:
+            controller.p = original_p
+            controller._get_pybullet_context = original_get_context
+            controller.sync_manual_attachments = original_sync
+            controller._pump_callback = original_pump
+            controller._pace_pybullet_realtime_step = original_pace
+            controller.solve_fk = original_solve_fk
+            RUNTIME.end_effector_id = original_ee
+            if hasattr(RUNTIME, "ee_trajectory_debug_ids"):
+                RUNTIME.ee_trajectory_debug_ids[:] = original_actual_debug_ids
+            if hasattr(RUNTIME, "planned_ee_trajectory_debug_ids"):
+                RUNTIME.planned_ee_trajectory_debug_ids[:] = original_planned_debug_ids
+
+        planned_lines = [
+            line for line in fake_p.lines
+            if line[2].get("lineColorRGB") == controller._PLANNED_EE_TRAJECTORY_COLOR
+        ]
+        self.assertEqual(len(planned_lines), 1)
+        self.assertEqual(planned_lines[0][0], (0.0, 0.0, 0.2))
+        self.assertEqual(planned_lines[0][1], (0.1, 0.0, 0.2))
+        self.assertEqual(observed_planned_debug_ids[:1], [200])
+
     def test_ik_solver_yields_downward_orientation_at_e1(self):
         """Bug 2: E1 位置的 IK 解应使 tool0 z 轴接近竖直向下。
 

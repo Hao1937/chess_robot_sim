@@ -7,11 +7,13 @@ from typing import Callable
 from src.common.config import DEFAULT_CONFIG, Config
 from src.common.types import BoardState, ExecutionResult, JointTrajectory, LogicalAction, MoveCommand, PieceColor, RobotHandle, SceneHandle
 from src.control.controller import execute_trajectory, set_simulation_pump_callback
+from src.control.fk_solver import solve_fk
 from src.control.logger import summarize_execution
 from src.interaction.board_state import create_initial_board, make_logical_actions
 from src.interaction.chess_rules import validate_move
 from src.interaction.cli import parse_command
 from src.interaction.gui import create_board_gui, poll_gui_command
+from src.planning.ik_solver import current_joint_seed
 from src.planning.motion_primitives import build_motion_primitives, get_action_primitive_ranges
 from src.planning.obstacle_map import build_primitive_obstacle_contexts
 from src.planning.trajectory_planner import plan_trajectory
@@ -70,9 +72,13 @@ def run_command(
     if horizontal_override is not None:
         from dataclasses import replace
         plan_config = replace(config, waypoint_vertical_step=0.04)
+    # 计算当前 EE 位置作为轨迹规划的起点（用于绘制完整的规划轨迹线）
+    start_joints = current_joint_seed(config)
+    start_xyz = solve_fk(start_joints, config)
     trajectory = plan_trajectory(
         planning_contexts, config=plan_config,
         horizontal_cartesian_override=horizontal_override,
+        start_xyz=start_xyz,
     )
 
     # ── 可行性验证：在 attach 任何棋子之前检查轨迹是否安全可达 ──
@@ -119,6 +125,8 @@ def run_command(
             # 前段：approach + descend (primitives prim_start .. prim_start+1)
             pre_end = prim_start + 2  # approach=0, descend=1 → end=2
             wp_pre_start = primitive_ranges[prim_start][0]
+            if prim_start == 0:
+                wp_pre_start = 0  # 首段需包含 start_xyz 起始点
             wp_pre_end = primitive_ranges[pre_end - 1][1]
             pre_segment = JointTrajectory(
                 joint_waypoints=trajectory.joint_waypoints[wp_pre_start:wp_pre_end],
@@ -144,6 +152,8 @@ def run_command(
             # ── place：先 transfer+descend 到达目标，再 detach，最后 retreat ──
             pre_end = prim_start + 2  # transfer=0, descend=1 → end=2
             wp_pre_start = primitive_ranges[prim_start][0]
+            if prim_start == 0:
+                wp_pre_start = 0  # 首段需包含 start_xyz 起始点
             wp_pre_end = primitive_ranges[pre_end - 1][1]
             pre_segment = JointTrajectory(
                 joint_waypoints=trajectory.joint_waypoints[wp_pre_start:wp_pre_end],
@@ -168,6 +178,8 @@ def run_command(
         else:
             # ── safety_pause 等无需 attach/detach 的动作 ──
             wp_start = primitive_ranges[prim_start][0]
+            if prim_start == 0:
+                wp_start = 0  # 首段需包含 start_xyz 起始点
             wp_end = primitive_ranges[prim_end - 1][1] if prim_end > prim_start else wp_start
             segment = JointTrajectory(
                 joint_waypoints=trajectory.joint_waypoints[wp_start:wp_end],

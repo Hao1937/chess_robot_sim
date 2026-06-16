@@ -29,6 +29,7 @@ class SimulationRuntime:
     attachment_constraints: dict[str, int] = field(default_factory=dict)
     manually_attached_pieces: dict[str, int] = field(default_factory=dict)
     ee_trajectory_debug_ids: list[int] = field(default_factory=list)
+    planned_ee_trajectory_debug_ids: list[int] = field(default_factory=list)
     # piece_id → end_effector_id 的手动吸附映射（非约束方案）
     human_zone_body_id: int | None = None
 
@@ -87,9 +88,15 @@ def clear_scene_bodies() -> None:
             p.removeUserDebugItem(debug_id, physicsClientId=RUNTIME.client_id)
         except Exception:
             pass
+    for debug_id in RUNTIME.planned_ee_trajectory_debug_ids:
+        try:
+            p.removeUserDebugItem(debug_id, physicsClientId=RUNTIME.client_id)
+        except Exception:
+            pass
     RUNTIME.scene_body_ids.clear()
     RUNTIME.debug_item_ids.clear()
     RUNTIME.ee_trajectory_debug_ids.clear()
+    RUNTIME.planned_ee_trajectory_debug_ids.clear()
     RUNTIME.piece_body_ids.clear()
     RUNTIME.piece_cells.clear()
     RUNTIME.piece_ids_by_cell.clear()

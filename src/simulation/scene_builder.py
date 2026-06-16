@@ -132,6 +132,7 @@ def clear_debug_visuals() -> None:
         _WAYPOINT_DEBUG_IDS.clear()
         _WAYPOINT_MARKER_BODY_IDS.clear()
         RUNTIME.ee_trajectory_debug_ids.clear()
+        RUNTIME.planned_ee_trajectory_debug_ids.clear()
         return
     for debug_id in _WAYPOINT_DEBUG_IDS:
         try:
@@ -150,9 +151,15 @@ def clear_debug_visuals() -> None:
             p.removeUserDebugItem(debug_id, physicsClientId=RUNTIME.client_id)
         except Exception:
             pass
+    for debug_id in RUNTIME.planned_ee_trajectory_debug_ids:
+        try:
+            p.removeUserDebugItem(debug_id, physicsClientId=RUNTIME.client_id)
+        except Exception:
+            pass
     _WAYPOINT_DEBUG_IDS.clear()
     _WAYPOINT_MARKER_BODY_IDS.clear()
     RUNTIME.ee_trajectory_debug_ids.clear()
+    RUNTIME.planned_ee_trajectory_debug_ids.clear()
 
 
 def draw_waypoints(

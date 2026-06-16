@@ -37,6 +37,8 @@ _VELOCITY_GAIN = 1.0
 _MOTOR_FORCE = 800
 _EE_TRAJECTORY_COLOR = (1.0, 0.45, 0.0)
 _EE_TRAJECTORY_LINE_WIDTH = 2.5
+_PLANNED_EE_TRAJECTORY_COLOR = (0.0, 0.65, 1.0)
+_PLANNED_EE_TRAJECTORY_LINE_WIDTH = 2.0
 
 # 可选回调：在每个 waypoint 仿真步进后调用，用于保持 GUI 事件循环活跃
 _pump_callback: Callable[[], None] | None = None
@@ -111,6 +113,8 @@ def execute_trajectory(
     # （见 trajectory_planner.current_joint_seed），机器人从当前位置平滑驱动
     # 到首 waypoint，无瞬移。
     _pyb = _get_pybullet_context()
+    if _pyb is not None:
+        _draw_planned_end_effector_trajectory(_pyb, desired, config)
 
     actual: list[tuple[float, ...]] = []
     joint_errors: list[float] = []
@@ -347,6 +351,39 @@ def _draw_end_effector_trajectory_segment(
     except Exception:
         return
     RUNTIME.ee_trajectory_debug_ids.append(debug_id)
+
+
+def _draw_planned_end_effector_trajectory(
+    ctx: _PyBulletContext,
+    joint_waypoints: list[tuple[float, ...]],
+    config: Config,
+) -> None:
+    """Draw the planned EE path from desired joint waypoints."""
+    if len(joint_waypoints) < 2:
+        return
+    positions: list[tuple[float, float, float]] = []
+    for waypoint in joint_waypoints:
+        try:
+            pos = solve_fk(waypoint, config)
+        except Exception:
+            return
+        positions.append((float(pos[0]), float(pos[1]), float(pos[2])))
+
+    for start, end in zip(positions, positions[1:]):
+        if math.dist(start, end) < 1e-7:
+            continue
+        try:
+            debug_id = p.addUserDebugLine(
+                start,
+                end,
+                lineColorRGB=_PLANNED_EE_TRAJECTORY_COLOR,
+                lineWidth=_PLANNED_EE_TRAJECTORY_LINE_WIDTH,
+                lifeTime=0,
+                physicsClientId=ctx.client_id,
+            )
+        except Exception:
+            return
+        RUNTIME.planned_ee_trajectory_debug_ids.append(debug_id)
 
 
 def _execute_mock_step(

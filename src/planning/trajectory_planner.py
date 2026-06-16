@@ -5,7 +5,7 @@ import math
 from src.common.config import DEFAULT_CONFIG, Config
 from src.common.types import JointTrajectory, MotionPrimitive, Obstacle, PrimitivePlanningContext
 from src.planning.collision_checker import direct_path_clear
-from src.planning.ik_solver import is_reachable, solve_ik
+from src.planning.ik_solver import current_joint_seed, is_reachable, solve_ik
 from src.planning.path_search import a_star_2d
 from src.planning.trajectory_smoother import (
     interpolate_waypoints_cartesian,
@@ -24,6 +24,7 @@ def plan_trajectory(
     enable_smoothing: bool = True,
     enable_interpolation: bool = True,
     horizontal_cartesian_override: list[list[tuple[float, float, float]] | None] | None = None,
+    start_xyz: tuple[float, float, float] | None = None,
 ) -> JointTrajectory:
     """规划关节轨迹。
 
@@ -40,11 +41,17 @@ def plan_trajectory(
         enable_interpolation: 是否启用 waypoint 插值
         horizontal_cartesian_override: 手写 Cartesian 路径列表，按顺序替换每个
             approach/transfer primitive（None 条目走正常路径规划）
+        start_xyz: 起始 EE 世界坐标。传入时 prepend 为第一个 Cartesian waypoint，
+            使第一个 approach/transfer primitive 能从此位置插值到目标。
+            也用于绘制完整的规划轨迹线（从机器人实际位置开始）。
 
     Returns:
         JointTrajectory(joint_waypoints, speed_profile)
     """
     cartesian_waypoints: list[tuple[float, float, float]] = []
+    # 预置起始点：让第一个 primitive 有 prev 可插值，规划轨迹从实际位置起算
+    if start_xyz is not None:
+        cartesian_waypoints.append(start_xyz)
     speed_profile: list[str] = []
     primitive_ranges: list[tuple[int, int]] = []
 
@@ -99,8 +106,9 @@ def plan_trajectory(
     speed_profile = speed_profile[:len(cartesian_waypoints)]
 
     # ── IK 转换（链式：前一个解作为下一个的种子，确保解分支连续）──
+    # 从机器人当前实际关节角播种，确保轨迹与物理位置连续
     joint_waypoints: list[tuple[float, ...]] = []
-    seed = config.home_pose[:6]
+    seed = current_joint_seed(config)
     for wp in cartesian_waypoints:
         jw = solve_ik(wp, config, seed=seed)
         joint_waypoints.append(jw)
