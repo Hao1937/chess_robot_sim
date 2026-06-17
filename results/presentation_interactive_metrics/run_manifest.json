@@ -1,0 +1,23 @@
+{
+  "mode": "pybullet_direct_no_gui",
+  "commands": [
+    "A1 A3",
+    "B10 A8",
+    "H3 H10",
+    "C10 E8",
+    "A8 B6",
+    "B6 A4",
+    "reset"
+  ],
+  "result_count": 7,
+  "pybullet_available": true,
+  "client_id": 0,
+  "connection_info": {
+    "isConnected": 1,
+    "connectionMethod": 2
+  },
+  "environment": {
+    "CHESS_ROBOT_PYBULLET_GUI": "0",
+    "CHESS_ROBOT_BOARD_GUI": "0"
+  }
+}
