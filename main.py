@@ -34,10 +34,7 @@ def run_command(
     config: Config = DEFAULT_CONFIG,
     *,
     human_hand_present: bool = False,
-    skip_feasibility: bool = False,
-    horizontal_override: list[list[tuple[float, float, float]] | None] | None = None,
     logical_actions_override: list[LogicalAction] | None = None,
-    allow_rook_jumps: bool = False,
 ) -> dict[str, object]:
     """Run one command through the A/B/C/D pipeline using an existing session."""
     # 不再重置/teleport 关节：规划层已从机器人当前实际姿态播种 IK 链
@@ -47,7 +44,7 @@ def run_command(
     # 清理上一个命令的路径可视化线条，避免累积
     clear_debug_visuals()
 
-    validation = validate_move(board, command, allow_rook_jumps=allow_rook_jumps)
+    validation = validate_move(board, command)
     if not validation.is_legal:
         raise ValueError(validation.reason)
 
@@ -67,26 +64,19 @@ def run_command(
         for context in planning_contexts
         for obstacle in context.obstacles
     })
-    # 有手写弧线覆盖时用稀疏垂直步长，减少 C10 下降段 IK 路点数
-    plan_config = config
-    if horizontal_override is not None:
-        from dataclasses import replace
-        plan_config = replace(config, waypoint_vertical_step=0.04)
     # 计算当前 EE 位置作为轨迹规划的起点（用于绘制完整的规划轨迹线）
     start_joints = current_joint_seed(config)
     start_xyz = solve_fk(start_joints, config)
     trajectory = plan_trajectory(
-        planning_contexts, config=plan_config,
-        horizontal_cartesian_override=horizontal_override,
+        planning_contexts, config=config,
         start_xyz=start_xyz,
     )
 
     # ── 可行性验证：在 attach 任何棋子之前检查轨迹是否安全可达 ──
-    if not skip_feasibility:
-        from src.planning.feasibility import validate_trajectory_feasibility
-        ok, reason = validate_trajectory_feasibility(planning_contexts, trajectory, config)
-        if not ok:
-            raise ValueError(f"路线不可达，请移除障碍物：{reason}")
+    from src.planning.feasibility import validate_trajectory_feasibility
+    ok, reason = validate_trajectory_feasibility(planning_contexts, trajectory, config)
+    if not ok:
+        raise ValueError(f"路线不可达，请移除障碍物：{reason}")
 
     # 按 action 分段执行，在 pick/place 对之间切换 attach/detach 目标。
     # 这样吃子时敌方棋子也能正确吸附跟随、到达 captured area 后释放，
@@ -290,13 +280,8 @@ def run_interactive(
     max_steps: int | None = None,
     *,
     enable_board_gui: bool = True,
-    interactive2_mode: bool = False,
 ) -> dict[str, object]:
-    """Keep robot, scene, and board alive while polling commands continuously.
-
-    interactive2_mode: 演示模式——前两步走正常管线（跳过 feasibility），
-    第三步由假避障算法接管，执行手写绕行弧线脚本。
-    """
+    """Keep robot, scene, and board alive while polling commands continuously."""
     board = create_initial_board()
     robot = load_robot()
     scene = build_scene(config=config, obstacle_mode="mode_1")
@@ -357,26 +342,15 @@ def run_interactive(
         )
 
         try:
-            if interactive2_mode and steps == 2:
-                result = run_command(
-                    command, board, scene, robot, config,
-                    human_hand_present=human_hand_present,
-                    horizontal_override=_build_demo_arcs(config),
-                    skip_feasibility=True,
-                    logical_actions_override=logical_actions_override,
-                    allow_rook_jumps=interactive2_mode,
-                )
-            else:
-                result = run_command(
-                    command,
-                    board,
-                    scene,
-                    robot,
-                    config,
-                    human_hand_present=human_hand_present,
-                    logical_actions_override=logical_actions_override,
-                    allow_rook_jumps=interactive2_mode,
-                )
+            result = run_command(
+                command,
+                board,
+                scene,
+                robot,
+                config,
+                human_hand_present=human_hand_present,
+                logical_actions_override=logical_actions_override,
+            )
         except ValueError as exc:
             if board_gui.is_open:
                 board_gui.set_status("")
@@ -478,60 +452,15 @@ def _merge_executions(segments: list[ExecutionResult]) -> ExecutionResult:
     )
 
 
-def _build_demo_arcs(config: Config) -> list[list[tuple[float, float, float]] | None]:
-    """构建第三步所有水平移动阶段的手写弧线 Cartesian 路径。
-
-    按 primitive 出现顺序返回，None 表示走正常路径规划。
-    柱子位于 C6 世界坐标 (0.12, 0.30)，半径 0.003m。
-
-    第三步的 4 个水平 primitive (approach+transfer)：
-      0. approach C10      → 弧线（从 C2 附近横穿 C6 去 C10）
-      1. transfer CAPTURED → 弧线（C10 → 被吃区）
-      2. approach C2       → None（被吃区→C2，不经过 C6，正常即可）
-      3. transfer C10      → 弧线（C2 → C10，绕过 C6）
-    """
-    z_hi = 0.33  # 飞越高度（柱顶 0.28 + 间隙）
-    z_end = config.z_safe  # 弧线末端回落至 z_safe，避免 C10 高 z IK 卡顿
-
-    # 弧线 A: C2 ←→ C10 双向通用（大幅右绕 C6 柱至 I 列边缘）
-    #   仅末端回落 z_safe，绕行段全高飞越
-    arc_along_c = [
-        (0.12, 0.06, z_hi),    # C2 正上方
-        (0.20, 0.10, z_hi),    # 开始右拐
-        (0.32, 0.16, z_hi),    # 继续右偏
-        (0.42, 0.22, z_hi),    # 大幅右绕
-        (0.45, 0.30, z_hi),    # 柱位最右点飞越
-        (0.42, 0.38, z_hi),    # 越过柱位
-        (0.32, 0.44, z_hi),    # 开始回归
-        (0.20, 0.50, z_hi),    # 保持右偏
-        (0.12, 0.54, z_end),   # C10 回落 z_safe（仅末端，绕行不变）
-    ]
-
-    # 弧线 B: C10 → 被吃区 (0.60, 0.06)，右侧远绕
-    arc_to_captured = [
-        (0.12, 0.54, z_hi),    # C10 正上方飞越
-        (0.24, 0.44, z_hi),    # 右前弧线
-        (0.40, 0.30, z_hi),    # 远绕
-        (0.52, 0.16, z_hi),    # 越过高点
-        (0.60, 0.06, z_end),   # 被吃区回落 z_safe
-    ]
-
-    return [arc_along_c, arc_to_captured, None, arc_along_c]
-
-
 def main() -> None:
     parser = argparse.ArgumentParser(description="Chinese chess robot arm simulation skeleton")
     parser.add_argument("--demo", action="store_true", help="run one mock command and exit")
     parser.add_argument("--interactive", action="store_true", help="keep the session open and poll commands")
-    parser.add_argument("--interactive2", action="store_true",
-                        help="demo mode: obstacle_mode=1 with fixed 3-step choreography (manual arc on step 3)")
     parser.add_argument("--command", default="A1 A2", help="move command, for example: A1 A2")
     args = parser.parse_args()
 
     if args.interactive:
         run_interactive()
-    elif args.interactive2:
-        run_interactive(interactive2_mode=True)
     elif args.demo:
         result = run_demo(args.command)
         print("Demo command:", result["command"])

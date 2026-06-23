@@ -132,32 +132,6 @@ class ContractInterfaceTests(unittest.TestCase):
         self.assertFalse(horizontal.is_legal)
         self.assertIn("blocked", horizontal.reason)
 
-    def test_rook_jump_can_be_allowed_for_interactive2_only(self):
-        from src.common.types import BoardState, Piece, PieceColor, PieceType
-        from src.interaction.chess_rules import validate_move
-        from src.interaction.cli import parse_command
-
-        board = BoardState(pieces={
-            "A1": Piece(piece_id="red_rook_1", kind=PieceType.ROOK, color=PieceColor.RED, cell="A1"),
-            "A2": Piece(piece_id="black_horse_1", kind=PieceType.HORSE, color=PieceColor.BLACK, cell="A2"),
-            "A4": Piece(piece_id="black_soldier_1", kind=PieceType.SOLDIER, color=PieceColor.BLACK, cell="A4"),
-            "B1": Piece(piece_id="red_cannon_1", kind=PieceType.CANNON, color=PieceColor.RED, cell="B1"),
-        })
-
-        jump_capture = parse_command("A1 A4")
-        diagonal = parse_command("A1 B2")
-        friendly_target = parse_command("A1 B1")
-
-        self.assertTrue(
-            validate_move(board, jump_capture, allow_rook_jumps=True).is_legal
-        )
-        self.assertFalse(
-            validate_move(board, diagonal, allow_rook_jumps=True).is_legal
-        )
-        self.assertFalse(
-            validate_move(board, friendly_target, allow_rook_jumps=True).is_legal
-        )
-
     def test_planning_builds_motion_primitives_and_speed_profile(self):
         from src.common.config import DEFAULT_CONFIG
         from src.common.types import LogicalAction
@@ -491,57 +465,6 @@ class ContractInterfaceTests(unittest.TestCase):
             main.set_human_safety_zone = original_toggle
 
         self.assertEqual(visual_calls, [True, False])
-
-    def test_interactive2_mode_allows_rook_jump_validation(self):
-        import main
-        from src.common.types import ExecutionResult, MoveCommand, RobotHandle, SceneHandle
-
-        commands = iter([
-            MoveCommand(command_type="move", from_cell="A1", to_cell="A4"),
-            MoveCommand(command_type="quit"),
-        ])
-        allow_flags: list[object] = []
-        original_poll = main.poll_gui_command
-        original_run_command = main.run_command
-        original_load_robot = main.load_robot
-        original_build_scene = main.build_scene
-        original_pump = main.set_simulation_pump_callback
-
-        def fake_run_command(command, board, scene, robot, config=main.DEFAULT_CONFIG, **kwargs):
-            allow_flags.append(kwargs.get("allow_rook_jumps"))
-            return {
-                "command": command,
-                "actions": [],
-                "execution": ExecutionResult(
-                    success=True,
-                    desired_joint_angles=[],
-                    actual_joint_angles=[],
-                    joint_errors=[],
-                    end_effector_errors=[],
-                    obstacle_clearances=[],
-                    execution_time=0.0,
-                ),
-                "obstacle_ids": [],
-            }
-
-        try:
-            main.poll_gui_command = lambda board, input_func=input: next(commands)
-            main.run_command = fake_run_command
-            main.load_robot = lambda: RobotHandle(robot_id=1, end_effector_id=2, joint_indices=())
-            main.build_scene = lambda config=main.DEFAULT_CONFIG, obstacle_mode="mode_1": SceneHandle(
-                board_id=1, piece_ids={}, obstacles=[]
-            )
-            main.set_simulation_pump_callback = lambda callback: None
-
-            main.run_interactive(enable_board_gui=False, interactive2_mode=True)
-        finally:
-            main.poll_gui_command = original_poll
-            main.run_command = original_run_command
-            main.load_robot = original_load_robot
-            main.build_scene = original_build_scene
-            main.set_simulation_pump_callback = original_pump
-
-        self.assertEqual(allow_flags, [True])
 
     def test_interactive_reset_replays_history_in_reverse_and_updates_gui(self):
         import main

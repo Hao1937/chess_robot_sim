@@ -6,8 +6,6 @@ from src.common.types import BoardState, MoveCommand, PieceColor, PieceType, Val
 def validate_move(
     board: BoardState,
     command: MoveCommand,
-    *,
-    allow_rook_jumps: bool = False,
 ) -> ValidationResult:
     """Validate a simplified Chinese chess move.
 
@@ -27,7 +25,7 @@ def validate_move(
         return ValidationResult(False, "target cell contains friendly piece")
 
     if moving_piece.kind == PieceType.ROOK:
-        return _validate_rook(board, command, allow_rook_jumps=allow_rook_jumps)
+        return _validate_rook(board, command)
     if moving_piece.kind == PieceType.HORSE:
         return _validate_horse(command)
     if moving_piece.kind == PieceType.CANNON:
@@ -46,14 +44,12 @@ def validate_move(
 def _validate_rook(
     board: BoardState,
     command: MoveCommand,
-    *,
-    allow_rook_jumps: bool = False,
 ) -> ValidationResult:
     from_col, from_row = _split_cell(command.from_cell)
     to_col, to_row = _split_cell(command.to_cell)
     if from_col != to_col and from_row != to_row:
         return ValidationResult(False, "rook must move in a straight line")
-    if not allow_rook_jumps and _count_between(board, command.from_cell, command.to_cell) > 0:
+    if _count_between(board, command.from_cell, command.to_cell) > 0:
         return ValidationResult(False, "rook path is blocked")
     return ValidationResult(True)
 

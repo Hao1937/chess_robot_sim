@@ -23,7 +23,6 @@ def plan_trajectory(
     enable_path_search: bool = True,
     enable_smoothing: bool = True,
     enable_interpolation: bool = True,
-    horizontal_cartesian_override: list[list[tuple[float, float, float]] | None] | None = None,
     start_xyz: tuple[float, float, float] | None = None,
 ) -> JointTrajectory:
     """规划关节轨迹。
@@ -39,8 +38,6 @@ def plan_trajectory(
         enable_path_search: 是否启用 A* 路径搜索绕障
         enable_smoothing: 是否启用 shortcut + joint 平滑
         enable_interpolation: 是否启用 waypoint 插值
-        horizontal_cartesian_override: 手写 Cartesian 路径列表，按顺序替换每个
-            approach/transfer primitive（None 条目走正常路径规划）
         start_xyz: 起始 EE 世界坐标。传入时 prepend 为第一个 Cartesian waypoint，
             使第一个 approach/transfer primitive 能从此位置插值到目标。
             也用于绘制完整的规划轨迹线（从机器人实际位置开始）。
@@ -55,9 +52,6 @@ def plan_trajectory(
     speed_profile: list[str] = []
     primitive_ranges: list[tuple[int, int]] = []
 
-    # horizontal override 消费游标（approach + transfer 共用）
-    override_cursor = 0
-
     for item in primitives_or_contexts:
         if isinstance(item, PrimitivePlanningContext):
             primitive = item.primitive
@@ -69,27 +63,11 @@ def plan_trajectory(
         wp_before = len(cartesian_waypoints)
 
         if primitive.primitive_type in ("approach", "transfer"):
-            # 检查是否有对应的 hand-written 路径
-            override_path = None
-            if (
-                horizontal_cartesian_override is not None
-                and override_cursor < len(horizontal_cartesian_override)
-            ):
-                override_path = horizontal_cartesian_override[override_cursor]
-                override_cursor += 1
-
-            if override_path is not None:
-                _inject_transfer_override(
-                    override_path,
-                    cartesian_waypoints, speed_profile,
-                    enable_interpolation, config,
-                )
-            else:
-                _plan_horizontal_segment(
-                    primitive, primitive_obstacles, config,
-                    cartesian_waypoints, speed_profile,
-                    enable_path_search, enable_smoothing, enable_interpolation,
-                )
+            _plan_horizontal_segment(
+                primitive, primitive_obstacles, config,
+                cartesian_waypoints, speed_profile,
+                enable_path_search, enable_smoothing, enable_interpolation,
+            )
         else:
             _plan_vertical_segment(
                 primitive,
@@ -374,27 +352,3 @@ def _try_overfly_horizontal(
     )
 
     return True
-
-
-def _inject_transfer_override(
-    override_path: list[tuple[float, float, float]],
-    cartesian_waypoints: list[tuple[float, float, float]],
-    speed_profile: list[str],
-    enable_interpolation: bool,
-    config: Config,
-) -> None:
-    """将手写 Cartesian 路径注入 transfer 阶段，替换正常路径规划。
-
-    手写路径本身已足够稠密，插值步骤可跳过（由调用方 enable_interpolation 控制）。
-    跳过首点（与 prev 重复）→ 追加 safe 速度标记。
-    """
-    prev = cartesian_waypoints[-1] if cartesian_waypoints else None
-
-    # 手写路径已预调密度，跳过插值避免在工作空间边界生成大量慢速 IK 路点
-    path_3d = list(override_path)
-
-    # 跳过首点（与 prev 或 override_path 自身起点重复）
-    start_idx = 1 if prev is not None else 0
-    new_points = path_3d[start_idx:]
-    cartesian_waypoints.extend(new_points)
-    speed_profile.extend(["safe"] * len(new_points))
