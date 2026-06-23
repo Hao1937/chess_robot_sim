@@ -16,7 +16,9 @@
 ```bash
 python main.py --demo
 ```
-
+```
+python main.py --interactive
+```
 在仓库根目录运行测试：
 
 ```bash
