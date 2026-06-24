@@ -16,7 +16,10 @@
 ```bash
 python main.py --demo
 ```
-
+```
+$env:CHESS_ROBOT_PYBULLET_GUI=1
+python main.py --interactive
+```
 在仓库根目录运行测试：
 
 ```bash
