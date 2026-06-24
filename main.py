@@ -284,7 +284,7 @@ def run_interactive(
     """Keep robot, scene, and board alive while polling commands continuously."""
     board = create_initial_board()
     robot = load_robot()
-    scene = build_scene(config=config, obstacle_mode="mode_1")
+    scene = build_scene(config=config, obstacle_mode="mode_4")
     results: list[dict[str, object]] = []
     action_history: list[list[LogicalAction]] = []
     human_hand_present = False
